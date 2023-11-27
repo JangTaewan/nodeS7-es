@@ -31,1526 +31,1532 @@
 // when using this library.  Test thoroughly in a laboratory environment.
 
 
-import { connect } from "net";
-import { format } from "util";
+import {connect} from "net";
+var util = require("util");
 var effectiveDebugLevel = 0; // intentionally global, shared between connections
 var silentMode = false;
 
-export default NodeS7;
+module.exports = NodeS7;
 
-class NodeS7 {
-	constructor(opts) {
-		opts = opts || {};
-		silentMode = opts.silent || false;
-		effectiveDebugLevel = opts.debug ? 99 : 0;
+function NodeS7(opts) {
+	opts = opts || {};
+	silentMode = opts.silent || false;
+	effectiveDebugLevel = opts.debug ? 99 : 0
 
-		var self = this;
+	var self = this;
 
-		self.connectReq = Buffer.from([0x03, 0x00, 0x00, 0x16, 0x11, 0xe0, 0x00, 0x00, 0x00, 0x02, 0x00, 0xc0, 0x01, 0x0a, 0xc1, 0x02, 0x01, 0x00, 0xc2, 0x02, 0x01, 0x02]);
-		self.negotiatePDU = Buffer.from([0x03, 0x00, 0x00, 0x19, 0x02, 0xf0, 0x80, 0x32, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x08, 0x00, 0x08, 0x03, 0xc0]);
-		self.readReqHeader = Buffer.from([0x03, 0x00, 0x00, 0x1f, 0x02, 0xf0, 0x80, 0x32, 0x01, 0x00, 0x00, 0x08, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x04, 0x01]);
-		self.readReq = Buffer.alloc(1500);
-		self.writeReqHeader = Buffer.from([0x03, 0x00, 0x00, 0x1f, 0x02, 0xf0, 0x80, 0x32, 0x01, 0x00, 0x00, 0x08, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x05, 0x01]);
-		self.writeReq = Buffer.alloc(1500);
+	self.connectReq = Buffer.from([0x03, 0x00, 0x00, 0x16, 0x11, 0xe0, 0x00, 0x00, 0x00, 0x02, 0x00, 0xc0, 0x01, 0x0a, 0xc1, 0x02, 0x01, 0x00, 0xc2, 0x02, 0x01, 0x02]);
+	self.negotiatePDU = Buffer.from([0x03, 0x00, 0x00, 0x19, 0x02, 0xf0, 0x80, 0x32, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x08, 0x00, 0x08, 0x03, 0xc0]);
+	self.readReqHeader = Buffer.from([0x03, 0x00, 0x00, 0x1f, 0x02, 0xf0, 0x80, 0x32, 0x01, 0x00, 0x00, 0x08, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x04, 0x01]);
+	self.readReq = Buffer.alloc(1500);
+	self.writeReqHeader = Buffer.from([0x03, 0x00, 0x00, 0x1f, 0x02, 0xf0, 0x80, 0x32, 0x01, 0x00, 0x00, 0x08, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x05, 0x01]);
+	self.writeReq = Buffer.alloc(1500);
 
-		self.resetPending = false;
-		self.resetTimeout = undefined;
-		self.isoclient = undefined;
-		self.isoConnectionState = 0;
-		self.requestMaxPDU = 960;
-		self.maxPDU = 960;
-		self.requestMaxParallel = 8;
-		self.maxParallel = 8;
-		self.parallelJobsNow = 0;
-		self.maxGap = 5;
-		self.doNotOptimize = false;
-		self.connectCallback = undefined;
-		self.readDoneCallback = undefined;
-		self.writeDoneCallback = undefined;
-		self.connectTimeout = undefined;
-		self.PDUTimeout = undefined;
-		self.globalTimeout = 1500; // In many use cases we will want to increase this
+	self.resetPending = false;
+	self.resetTimeout = undefined;
+	self.isoclient = undefined;
+	self.isoConnectionState = 0;
+	self.requestMaxPDU = 960;
+	self.maxPDU = 960;
+	self.requestMaxParallel = 8;
+	self.maxParallel = 8;
+	self.parallelJobsNow = 0;
+	self.maxGap = 5;
+	self.doNotOptimize = false;
+	self.connectCallback = undefined;
+	self.readDoneCallback = undefined;
+	self.writeDoneCallback = undefined;
+	self.connectTimeout = undefined;
+	self.PDUTimeout = undefined;
+	self.globalTimeout = 1500; // In many use cases we will want to increase this
+        // In 0.3.17 this was made variable from cParam.timeout to ensure packets don't timeout at 1500ms if the user has specified a timeout externally.
+	self.rack = 0;
+	self.slot = 2;
+	self.localTSAP = null;
+	self.remoteTSAP = null;
 
-		// In 0.3.17 this was made variable from cParam.timeout to ensure packets don't timeout at 1500ms if the user has specified a timeout externally.
-		self.rack = 0;
-		self.slot = 2;
-		self.localTSAP = null;
-		self.remoteTSAP = null;
+	self.readPacketArray = [];
+	self.writePacketArray = [];
+	self.polledReadBlockList = [];
+	self.instantWriteBlockList = [];
+	self.globalReadBlockList = [];
+	self.globalWriteBlockList = [];
+	self.masterSequenceNumber = 1;
+	self.translationCB = doNothing;
+	self.connectionParams = undefined;
+	self.connectionID = 'UNDEF';
+	self.addRemoveArray = [];
+	self.readPacketValid = false;
+	self.writeInQueue = false;
+	self.connectCBIssued = false;
+	self.dropConnectionCallback = null;
+	self.dropConnectionTimer = null;
+	self.reconnectTimer = undefined;
+	self.rereadTimer = undefined;
+}
 
-		self.readPacketArray = [];
-		self.writePacketArray = [];
-		self.polledReadBlockList = [];
-		self.instantWriteBlockList = [];
-		self.globalReadBlockList = [];
-		self.globalWriteBlockList = [];
+NodeS7.prototype.getNextSeqNum = function() {
+	var self = this;
+
+	self.masterSequenceNumber += 1;
+	if (self.masterSequenceNumber > 32767) {
 		self.masterSequenceNumber = 1;
-		self.translationCB = doNothing;
-		self.connectionParams = undefined;
-		self.connectionID = 'UNDEF';
-		self.addRemoveArray = [];
-		self.readPacketValid = false;
-		self.writeInQueue = false;
-		self.connectCBIssued = false;
-		self.dropConnectionCallback = null;
-		self.dropConnectionTimer = null;
-		self.reconnectTimer = undefined;
-		self.rereadTimer = undefined;
 	}
-	getNextSeqNum() {
-		var self = this;
+	outputLog('seqNum is ' + self.masterSequenceNumber, 1, self.connectionID);
+	return self.masterSequenceNumber;
+}
 
-		self.masterSequenceNumber += 1;
-		if (self.masterSequenceNumber > 32767) {
-			self.masterSequenceNumber = 1;
-		}
-		outputLog('seqNum is ' + self.masterSequenceNumber, 1, self.connectionID);
-		return self.masterSequenceNumber;
+NodeS7.prototype.setTranslationCB = function(cb) {
+	var self = this;
+	if (typeof cb === "function") {
+		outputLog('Translation OK');
+		self.translationCB = cb;
 	}
-	setTranslationCB(cb) {
-		var self = this;
-		if (typeof cb === "function") {
-			outputLog('Translation OK');
-			self.translationCB = cb;
-		}
+}
+
+NodeS7.prototype.initiateConnection = function(cParam, callback) {
+	var self = this;
+	if (cParam === undefined) { cParam = { port: 102, host: '192.168.8.106' }; }
+	outputLog('Initiate Called - Connecting to PLC with address and parameters:');
+	outputLog(cParam);
+	if (typeof (cParam.rack) !== 'undefined') {
+		self.rack = cParam.rack;
 	}
-	initiateConnection(cParam, callback) {
-		var self = this;
-		if (cParam === undefined) { cParam = { port: 102, host: '192.168.8.106' }; }
-		outputLog('Initiate Called - Connecting to PLC with address and parameters:');
-		outputLog(cParam);
-		if (typeof (cParam.rack) !== 'undefined') {
-			self.rack = cParam.rack;
-		}
-		if (typeof (cParam.slot) !== 'undefined') {
-			self.slot = cParam.slot;
-		}
-		if (typeof (cParam.localTSAP) !== 'undefined') {
-			self.localTSAP = cParam.localTSAP;
-		}
-		if (typeof (cParam.remoteTSAP) !== 'undefined') {
-			self.remoteTSAP = cParam.remoteTSAP;
-		}
-		if (typeof (cParam.connection_name) === 'undefined') {
-			self.connectionID = cParam.host + " S" + self.slot;
-		} else {
-			self.connectionID = cParam.connection_name;
-		}
-		if (typeof (cParam.doNotOptimize) !== 'undefined') {
-			self.doNotOptimize = cParam.doNotOptimize;
-		}
-		if (typeof (cParam.timeout) !== 'undefined') { // Added in 0.3.17 to ensure packets don't timeout at 1500ms if the user has specified a timeout externally.
-			self.globalTimeout = cParam.timeout;
-		}
-		self.connectionParams = cParam;
-		self.connectCallback = callback;
-		self.connectCBIssued = false;
-		self.connectNow(self.connectionParams, false);
+	if (typeof (cParam.slot) !== 'undefined') {
+		self.slot = cParam.slot;
 	}
-	dropConnection(callback) {
-		var self = this;
-
-		// prevents triggering reconnection even after calling dropConnection (fixes #70)
-		clearTimeout(self.reconnectTimer);
-		clearTimeout(self.rereadTimer);
-		clearTimeout(self.connectTimeout);
-		clearTimeout(self.PDUTimeout);
-		self.reconnectTimer = undefined;
-		self.rereadTimer = undefined;
-		self.connectTimeout = undefined;
-		self.PDUTimeout = undefined;
-
-		if (typeof (self.isoclient) !== 'undefined') {
-			// store the callback and request and end to the connection
-			self.dropConnectionCallback = callback;
-			self.isoclient.end();
-			// now wait for 'on close' event to trigger connection cleanup
-			// but also start a timer to destroy the connection in case we do not receive the close
-			self.dropConnectionTimer = setTimeout(function () {
-				if (self.dropConnectionCallback) {
-					// clean up the connection now the socket has closed
-					self.connectionCleanup();
-					// initate the callback
-					self.dropConnectionCallback();
-					// prevent any possiblity of the callback being called twice
-					self.dropConnectionCallback = null;
-				}
-			}, 2500);
-		} else {
-			// if client not active, then callback immediately
-			callback();
-		}
+	if (typeof (cParam.localTSAP) !== 'undefined') {
+		self.localTSAP = cParam.localTSAP;
 	}
-	connectNow(cParam) {
-		var self = this;
-
-		// prevents any reconnect timer to fire this again
-		clearTimeout(self.reconnectTimer);
-		self.reconnectTimer = undefined;
-
-		// Don't re-trigger.
-		if (self.isoConnectionState >= 1) { return; }
-		self.connectionCleanup();
-
-		self.isoclient = connect(cParam);
-
-		self.isoclient.setTimeout(cParam.timeout || 5000, () => {
-			self.isoclient.destroy();
-			self.connectError.apply(self, [{ code: 'EUSERTIMEOUT' }]); // Former use of "arguments" was always going to be 0.  Use "USERTIMEOUT" to show difference between this and TCP timeout.                                                                                                                            
-		});
-
-		self.isoclient.once('connect', () => {
-			self.isoclient.setTimeout(0);
-			self.onTCPConnect.apply(self, arguments);
-		});
-
-		self.isoConnectionState = 1; // 1 = trying to connect  
-
-		self.isoclient.on('error', function () {
-			self.connectError.apply(self, arguments);
-		});
-
-		outputLog('<initiating a new connection ' + Date() + '>', 1, self.connectionID);
-		outputLog('Attempting to connect to host...', 0, self.connectionID);
+	if (typeof (cParam.remoteTSAP) !== 'undefined') {
+		self.remoteTSAP = cParam.remoteTSAP;
 	}
-	connectError(e) {
-		var self = this;
-
-		// Note that a TCP connection timeout error will appear here.  An ISO connection timeout error is a packet timeout.
-		outputLog('We Caught a connect error ' + e.code, 0, self.connectionID);
-		if ((!self.connectCBIssued) && (typeof (self.connectCallback) === "function")) {
-			self.connectCBIssued = true;
-			self.connectCallback(e);
-		}
-		self.isoConnectionState = 0;
+	if (typeof (cParam.connection_name) === 'undefined') {
+		self.connectionID = cParam.host + " S" + self.slot;
+	} else {
+		self.connectionID = cParam.connection_name;
 	}
-	readWriteError(e) {
-		var self = this;
-		outputLog('We Caught a read/write error ' + e.code + ' - will DISCONNECT and attempt to reconnect.');
-		self.isoConnectionState = 0;
+	if (typeof (cParam.doNotOptimize) !== 'undefined') {
+		self.doNotOptimize = cParam.doNotOptimize;
+	}
+	if (typeof (cParam.timeout) !== 'undefined') { // Added in 0.3.17 to ensure packets don't timeout at 1500ms if the user has specified a timeout externally.
+		self.globalTimeout = cParam.timeout;
+	}
+	self.connectionParams = cParam;
+	self.connectCallback = callback;
+	self.connectCBIssued = false;
+	self.connectNow(self.connectionParams, false);
+}
+
+NodeS7.prototype.dropConnection = function(callback) {
+	var self = this;
+
+	// prevents triggering reconnection even after calling dropConnection (fixes #70)
+	clearTimeout(self.reconnectTimer);
+	clearTimeout(self.rereadTimer);
+	clearTimeout(self.connectTimeout);
+	clearTimeout(self.PDUTimeout);
+	self.reconnectTimer = undefined;
+	self.rereadTimer = undefined;
+	self.connectTimeout = undefined;
+	self.PDUTimeout = undefined;
+
+	if (typeof (self.isoclient) !== 'undefined') {
+		// store the callback and request and end to the connection
+		self.dropConnectionCallback = callback;
+		self.isoclient.end();
+		// now wait for 'on close' event to trigger connection cleanup
+
+		// but also start a timer to destroy the connection in case we do not receive the close
+		self.dropConnectionTimer = setTimeout(function() {
+			if (self.dropConnectionCallback) {
+				// clean up the connection now the socket has closed
+				self.connectionCleanup();
+				// initate the callback
+				self.dropConnectionCallback();
+				// prevent any possiblity of the callback being called twice
+				self.dropConnectionCallback = null;
+			}
+		}, 2500);
+	} else {
+		// if client not active, then callback immediately
+		callback();
+	}
+}
+
+NodeS7.prototype.connectNow = function(cParam) {
+	var self = this;
+
+	// prevents any reconnect timer to fire this again
+	clearTimeout(self.reconnectTimer);
+	self.reconnectTimer = undefined;
+
+	// Don't re-trigger.
+	if (self.isoConnectionState >= 1) { return; }
+	self.connectionCleanup();
+
+        self.isoclient = connect(cParam);                                                                                                                                        
+
+        self.isoclient.setTimeout(cParam.timeout || 5000, () => {                                                                                                                    
+            self.isoclient.destroy();                                                                                                                                            
+            self.connectError.apply(self, [{ code: 'EUSERTIMEOUT' }]); // Former use of "arguments" was always going to be 0.  Use "USERTIMEOUT" to show difference between this and TCP timeout.                                                                                                                            
+        });                                                                                                                                                                          
+
+        self.isoclient.once('connect', () => {                                                                                                                                       
+            self.isoclient.setTimeout(0);                                                                                                                                                
+            self.onTCPConnect.apply(self, arguments);                                                                                                                            
+        });                                                                                                                                                                          
+
+        self.isoConnectionState = 1;  // 1 = trying to connect  
+
+	self.isoclient.on('error', function() {
+            self.connectError.apply(self, arguments);
+	});
+
+	outputLog('<initiating a new connection ' + Date() + '>', 1, self.connectionID);
+	outputLog('Attempting to connect to host...', 0, self.connectionID);
+}
+
+NodeS7.prototype.connectError = function(e) {
+	var self = this;
+
+	// Note that a TCP connection timeout error will appear here.  An ISO connection timeout error is a packet timeout.
+	outputLog('We Caught a connect error ' + e.code, 0, self.connectionID);
+	if ((!self.connectCBIssued) && (typeof (self.connectCallback) === "function")) {
+		self.connectCBIssued = true;
+		self.connectCallback(e);
+	}
+	self.isoConnectionState = 0;
+}
+
+NodeS7.prototype.readWriteError = function(e) {
+	var self = this;
+	outputLog('We Caught a read/write error ' + e.code + ' - will DISCONNECT and attempt to reconnect.');
+	self.isoConnectionState = 0;
+	self.connectionReset();
+}
+
+NodeS7.prototype.packetTimeout = function(packetType, packetSeqNum) {
+	var self = this;
+	outputLog('PacketTimeout called with type ' + packetType + ' and seq ' + packetSeqNum, 1, self.connectionID);
+	if (packetType === "connect") {
+		outputLog("TIMED OUT connecting to the PLC - Disconnecting", 0, self.connectionID);
+		outputLog("Wait for 2 seconds then try again.", 0, self.connectionID);
 		self.connectionReset();
-	}
-	packetTimeout(packetType, packetSeqNum) {
-		var self = this;
-		outputLog('PacketTimeout called with type ' + packetType + ' and seq ' + packetSeqNum, 1, self.connectionID);
-		if (packetType === "connect") {
-			outputLog("TIMED OUT connecting to the PLC - Disconnecting", 0, self.connectionID);
-			outputLog("Wait for 2 seconds then try again.", 0, self.connectionID);
-			self.connectionReset();
-			outputLog("Scheduling a reconnect from packetTimeout, connect type", 0, self.connectionID);
-			clearTimeout(self.reconnectTimer);
-			self.reconnectTimer = setTimeout(function () {
-				outputLog("The scheduled reconnect from packetTimeout, connect type, is happening now", 0, self.connectionID);
-				if (self.isoConnectionState === 0) {
-					self.connectNow.apply(self, arguments);
-				}
-			}, 2000, self.connectionParams);
-			return undefined;
-		}
-		if (packetType === "PDU") {
-			outputLog("TIMED OUT waiting for PDU reply packet from PLC - Disconnecting");
-			outputLog("Wait for 2 seconds then try again.", 0, self.connectionID);
-			self.connectionReset();
-			outputLog("Scheduling a reconnect from packetTimeout, connect type", 0, self.connectionID);
-			clearTimeout(self.reconnectTimer);
-			self.reconnectTimer = setTimeout(function () {
-				outputLog("The scheduled reconnect from packetTimeout, PDU type, is happening now", 0, self.connectionID);
+		outputLog("Scheduling a reconnect from packetTimeout, connect type", 0, self.connectionID);
+		clearTimeout(self.reconnectTimer);
+		self.reconnectTimer = setTimeout(function() {
+			outputLog("The scheduled reconnect from packetTimeout, connect type, is happening now", 0, self.connectionID);
+			if (self.isoConnectionState === 0) {
 				self.connectNow.apply(self, arguments);
-			}, 2000, self.connectionParams);
-			return undefined;
-		}
-		if (packetType === "read") {
-			outputLog("READ TIMEOUT on sequence number " + packetSeqNum, 0, self.connectionID);
-			if (self.isoConnectionState === 4) { // Reset before calling writeResponse so ResetNow will take place this cycle 
-				outputLog("ConnectionReset from read packet timeout.", 0, self.connectionID);
-				self.connectionReset();
 			}
-			self.readResponse(undefined, self.findReadIndexOfSeqNum(packetSeqNum));
-			return undefined;
-		}
-		if (packetType === "write") {
-			outputLog("WRITE TIMEOUT on sequence number " + packetSeqNum, 0, self.connectionID);
-			if (self.isoConnectionState === 4) { // Reset before calling writeResponse so ResetNow will take place this cycle 
-				outputLog("ConnectionReset from write packet timeout.", 0, self.connectionID);
-				self.connectionReset();
-			}
-			self.writeResponse(undefined, self.findWriteIndexOfSeqNum(packetSeqNum));
-			return undefined;
-		}
-		outputLog("Unknown timeout error.  Nothing was done - this shouldn't happen.");
+		}, 2000, self.connectionParams);
+		return undefined;
 	}
-	onTCPConnect() {
-		var self = this, connBuf;
-
-		outputLog('TCP Connection Established to ' + self.isoclient.remoteAddress + ' on port ' + self.isoclient.remotePort, 0, self.connectionID);
-		outputLog('Will attempt ISO-on-TCP connection', 0, self.connectionID);
-
-		// Track the connection state
-		self.isoConnectionState = 2; // 2 = TCP connected, wait for ISO connection confirmation
-
-
-		// Send an ISO-on-TCP connection request.
-		self.connectTimeout = setTimeout(function () {
-			self.packetTimeout.apply(self, arguments);
-		}, self.globalTimeout, "connect");
-
-		connBuf = self.connectReq.slice();
-
-		if (self.localTSAP !== null && self.remoteTSAP !== null) {
-			outputLog('Using localTSAP [0x' + self.localTSAP.toString(16) + '] and remoteTSAP [0x' + self.remoteTSAP.toString(16) + ']', 0, self.connectionID);
-			connBuf.writeUInt16BE(self.localTSAP, 16);
-			connBuf.writeUInt16BE(self.remoteTSAP, 20);
-		} else {
-			outputLog('Using rack [' + self.rack + '] and slot [' + self.slot + ']', 0, self.connectionID);
-			connBuf[21] = self.rack * 32 + self.slot;
-		}
-
-		self.isoclient.write(connBuf);
-
-		// Listen for a reply.
-		self.isoclient.on('data', function () {
-			self.onISOConnectReply.apply(self, arguments);
-		});
-
-		// Hook up the event that fires on disconnect
-		self.isoclient.on('end', function () {
-			self.onClientDisconnect.apply(self, arguments);
-		});
-
-		// listen for close (caused by us sending an end)
-		self.isoclient.on('close', function () {
-			self.onClientClose.apply(self, arguments);
-
-		});
+	if (packetType === "PDU") {
+		outputLog("TIMED OUT waiting for PDU reply packet from PLC - Disconnecting");
+		outputLog("Wait for 2 seconds then try again.", 0, self.connectionID);
+		self.connectionReset();
+		outputLog("Scheduling a reconnect from packetTimeout, connect type", 0, self.connectionID);
+		clearTimeout(self.reconnectTimer);
+		self.reconnectTimer = setTimeout(function() {
+			outputLog("The scheduled reconnect from packetTimeout, PDU type, is happening now", 0, self.connectionID);
+			self.connectNow.apply(self, arguments);
+		}, 2000, self.connectionParams);
+		return undefined;
 	}
-	onISOConnectReply(data) {
-		var self = this;
-		self.isoclient.removeAllListeners('data'); //self.onISOConnectReply);
-
-
-		//self.isoclient.removeAllListeners('error'); Avoid removing the calback before setting it again
-		clearTimeout(self.connectTimeout);
-
-		// ignore if we're not expecting it - prevents write after end exception as of #80
-		if (self.isoConnectionState != 2) {
-			outputLog('Ignoring ISO connect reply, expecting isoConnectionState of 2, is currently ' + self.isoConnectionState, 0, self.connectionID);
-			return;
-		}
-
-		// Track the connection state
-		self.isoConnectionState = 3; // 3 = ISO-ON-TCP connected, Wait for PDU response.
-
-
-		// Expected length is from packet sniffing - some applications may be different, especially using routing - not considered yet.
-		if (data.readInt16BE(2) !== data.length || data.length < 22 || data[5] !== 0xd0 || data[4] !== (data.length - 5)) {
-			outputLog('INVALID PACKET or CONNECTION REFUSED - DISCONNECTING');
-			outputLog(data);
-			outputLog('TPKT Length From Header is ' + data.readInt16BE(2) + ' and RCV buffer length is ' + data.length + ' and COTP length is ' + data.readUInt8(4) + ' and data[5] is ' + data[5]);
+	if (packetType === "read") {
+		outputLog("READ TIMEOUT on sequence number " + packetSeqNum, 0, self.connectionID);
+		if (self.isoConnectionState === 4) { // Reset before calling writeResponse so ResetNow will take place this cycle 
+			outputLog("ConnectionReset from read packet timeout.", 0, self.connectionID);
 			self.connectionReset();
-			return null;
 		}
+		self.readResponse(undefined, self.findReadIndexOfSeqNum(packetSeqNum));
+		return undefined;
+	}
+	if (packetType === "write") {
+		outputLog("WRITE TIMEOUT on sequence number " + packetSeqNum, 0, self.connectionID);
+		if (self.isoConnectionState === 4) { // Reset before calling writeResponse so ResetNow will take place this cycle 
+			outputLog("ConnectionReset from write packet timeout.", 0, self.connectionID);
+			self.connectionReset();
+		}
+		self.writeResponse(undefined, self.findWriteIndexOfSeqNum(packetSeqNum));
+		return undefined;
+	}
+	outputLog("Unknown timeout error.  Nothing was done - this shouldn't happen.");
+}
 
-		outputLog('ISO-on-TCP Connection Confirm Packet Received', 0, self.connectionID);
+NodeS7.prototype.onTCPConnect = function() {
+	var self = this, connBuf;
 
-		self.negotiatePDU.writeInt16BE(self.requestMaxParallel, 19);
-		self.negotiatePDU.writeInt16BE(self.requestMaxParallel, 21);
-		self.negotiatePDU.writeInt16BE(self.requestMaxPDU, 23);
+	outputLog('TCP Connection Established to ' + self.isoclient.remoteAddress + ' on port ' + self.isoclient.remotePort, 0, self.connectionID);
+	outputLog('Will attempt ISO-on-TCP connection', 0, self.connectionID);
 
-		self.PDUTimeout = setTimeout(function () {
-			self.packetTimeout.apply(self, arguments);
-		}, self.globalTimeout, "PDU");
+	// Track the connection state
+	self.isoConnectionState = 2;  // 2 = TCP connected, wait for ISO connection confirmation
 
-		self.isoclient.write(self.negotiatePDU.slice(0, 25));
-		self.isoclient.on('data', function () {
+	// Send an ISO-on-TCP connection request.
+	self.connectTimeout = setTimeout(function() {
+		self.packetTimeout.apply(self, arguments);
+	}, self.globalTimeout, "connect");
+
+	connBuf = self.connectReq.slice();
+
+	if(self.localTSAP !== null && self.remoteTSAP !== null) {
+		outputLog('Using localTSAP [0x' + self.localTSAP.toString(16) + '] and remoteTSAP [0x' + self.remoteTSAP.toString(16) + ']', 0, self.connectionID);
+		connBuf.writeUInt16BE(self.localTSAP, 16)
+		connBuf.writeUInt16BE(self.remoteTSAP, 20)
+	} else {
+		outputLog('Using rack [' + self.rack + '] and slot [' + self.slot + ']', 0, self.connectionID);
+		connBuf[21] = self.rack * 32 + self.slot;
+	}
+
+	self.isoclient.write(connBuf);
+
+	// Listen for a reply.
+	self.isoclient.on('data', function() {
+		self.onISOConnectReply.apply(self, arguments);
+	});
+
+	// Hook up the event that fires on disconnect
+	self.isoclient.on('end', function() {
+		self.onClientDisconnect.apply(self, arguments);
+	});
+
+    // listen for close (caused by us sending an end)
+	self.isoclient.on('close', function() {
+		self.onClientClose.apply(self, arguments);
+
+	});
+}
+
+NodeS7.prototype.onISOConnectReply = function(data) {
+	var self = this;
+	self.isoclient.removeAllListeners('data'); //self.onISOConnectReply);
+	//self.isoclient.removeAllListeners('error'); Avoid removing the calback before setting it again
+
+	clearTimeout(self.connectTimeout);
+
+	// ignore if we're not expecting it - prevents write after end exception as of #80
+	if (self.isoConnectionState != 2) { 
+		outputLog('Ignoring ISO connect reply, expecting isoConnectionState of 2, is currently ' + self.isoConnectionState, 0, self.connectionID);
+		return; 
+	}
+
+	// Track the connection state
+	self.isoConnectionState = 3;  // 3 = ISO-ON-TCP connected, Wait for PDU response.
+
+	// Expected length is from packet sniffing - some applications may be different, especially using routing - not considered yet.
+	if (data.readInt16BE(2) !== data.length || data.length < 22 || data[5] !== 0xd0 || data[4] !== (data.length - 5)) {
+		outputLog('INVALID PACKET or CONNECTION REFUSED - DISCONNECTING');
+		outputLog(data);
+		outputLog('TPKT Length From Header is ' + data.readInt16BE(2) + ' and RCV buffer length is ' + data.length + ' and COTP length is ' + data.readUInt8(4) + ' and data[5] is ' + data[5]);
+		self.connectionReset();
+		return null;
+	}
+
+	outputLog('ISO-on-TCP Connection Confirm Packet Received', 0, self.connectionID);
+
+	self.negotiatePDU.writeInt16BE(self.requestMaxParallel, 19);
+	self.negotiatePDU.writeInt16BE(self.requestMaxParallel, 21);
+	self.negotiatePDU.writeInt16BE(self.requestMaxPDU, 23);
+
+	self.PDUTimeout = setTimeout(function() {
+		self.packetTimeout.apply(self, arguments);
+	}, self.globalTimeout, "PDU");
+
+	self.isoclient.write(self.negotiatePDU.slice(0, 25));
+	self.isoclient.on('data', function() {
+		self.onPDUReply.apply(self, arguments);
+	});
+        self.isoclient.removeAllListeners('error');
+	self.isoclient.on('error', function() {
+		self.readWriteError.apply(self, arguments);
+	});
+}
+
+NodeS7.prototype.onPDUReply = function(theData) {
+	var self = this;
+	self.isoclient.removeAllListeners('data');
+	self.isoclient.removeAllListeners('error');
+
+	clearTimeout(self.PDUTimeout);
+
+	var data=checkRFCData(theData);
+
+	if(data==="fastACK"){
+		//Read again and wait for the requested data
+		outputLog('Fast Acknowledge received.', 0, self.connectionID);
+		self.isoclient.removeAllListeners('error');
+		self.isoclient.removeAllListeners('data');
+		self.isoclient.on('data', function() {
 			self.onPDUReply.apply(self, arguments);
 		});
-		self.isoclient.removeAllListeners('error');
-		self.isoclient.on('error', function () {
+		self.isoclient.on('error', function() {
 			self.readWriteError.apply(self, arguments);
 		});
-	}
-	onPDUReply(theData) {
-		var self = this;
-		self.isoclient.removeAllListeners('data');
-		self.isoclient.removeAllListeners('error');
+	}else if((data[4] + 1 + 12 + data.readInt16BE(13) === data.readInt16BE(2) - 4)){//valid the length of FA+S7 package :  ISO_Length+ISO_LengthItself+S7Com_Header+S7Com_Header_ParameterLength===TPKT_Length-4
+		//Everything OK...go on
+		// Track the connection state
+		self.isoConnectionState = 4;  // 4 = Received PDU response, good to go
+		self.parallelJobsNow = 0;     // We need to zero this here as it can go negative when not connected
 
-		clearTimeout(self.PDUTimeout);
+		var partnerMaxParallel1 = data.readInt16BE(21);
+		var partnerMaxParallel2 = data.readInt16BE(23);
+		var partnerPDU = data.readInt16BE(25);
 
-		var data = checkRFCData(theData);
+		self.maxParallel = self.requestMaxParallel;
 
-		if (data === "fastACK") {
-			//Read again and wait for the requested data
-			outputLog('Fast Acknowledge received.', 0, self.connectionID);
-			self.isoclient.removeAllListeners('error');
-			self.isoclient.removeAllListeners('data');
-			self.isoclient.on('data', function () {
-				self.onPDUReply.apply(self, arguments);
-			});
-			self.isoclient.on('error', function () {
-				self.readWriteError.apply(self, arguments);
-			});
-		} else if ((data[4] + 1 + 12 + data.readInt16BE(13) === data.readInt16BE(2) - 4)) { //valid the length of FA+S7 package :  ISO_Length+ISO_LengthItself+S7Com_Header+S7Com_Header_ParameterLength===TPKT_Length-4
-			//Everything OK...go on
-			// Track the connection state
-			self.isoConnectionState = 4; // 4 = Received PDU response, good to go
-			self.parallelJobsNow = 0; // We need to zero this here as it can go negative when not connected
-
-			var partnerMaxParallel1 = data.readInt16BE(21);
-			var partnerMaxParallel2 = data.readInt16BE(23);
-			var partnerPDU = data.readInt16BE(25);
-
-			self.maxParallel = self.requestMaxParallel;
-
-			if (partnerMaxParallel1 < self.requestMaxParallel) {
-				self.maxParallel = partnerMaxParallel1;
-			}
-			if (partnerMaxParallel2 < self.requestMaxParallel) {
-				self.maxParallel = partnerMaxParallel2;
-			}
-			if (partnerPDU < self.requestMaxPDU) {
-				self.maxPDU = partnerPDU;
-			} else {
-				self.maxPDU = self.requestMaxPDU;
-			}
-
-			outputLog('Received PDU Response - Proceeding with PDU ' + self.maxPDU + ' and ' + self.maxParallel + ' max parallel connections.', 0, self.connectionID);
-			self.isoclient.on('data', function () {
-				self.onResponse.apply(self, arguments);
-			}); // We need to make sure we don't add this event every time if we call it on data.
-			self.isoclient.on('error', function () {
-				self.readWriteError.apply(self, arguments);
-			}); // Might want to remove the self.connecterror listener
-
-			//self.isoclient.removeAllListeners('error');
-			if ((!self.connectCBIssued) && (typeof (self.connectCallback) === "function")) {
-				self.connectCBIssued = true;
-				self.connectCallback();
-			}
+		if (partnerMaxParallel1 < self.requestMaxParallel) {
+			self.maxParallel = partnerMaxParallel1;
+		}
+		if (partnerMaxParallel2 < self.requestMaxParallel) {
+			self.maxParallel = partnerMaxParallel2;
+		}
+		if (partnerPDU < self.requestMaxPDU) {
+			self.maxPDU = partnerPDU;
 		} else {
-			outputLog('INVALID Telegram ', 0, self.connectionID);
-			outputLog('Byte 0 From Header is ' + theData[0] + ' it has to be 0x03, Byte 5 From Header is  ' + theData[5] + ' and it has to be 0x0F ', 0, self.connectionID);
-			outputLog('INVALID PDU RESPONSE or CONNECTION REFUSED - DISCONNECTING', 0, self.connectionID);
-			outputLog('TPKT Length From Header is ' + theData.readInt16BE(2) + ' and RCV buffer length is ' + theData.length + ' and COTP length is ' + theData.readUInt8(4) + ' and data[6] is ' + theData[6], 0, self.connectionID);
-			outputLog(theData);
-			self.isoclient.end();
-			clearTimeout(self.reconnectTimer);
-			self.reconnectTimer = setTimeout(function () {
-				self.connectNow.apply(self, arguments);
-			}, 2000, self.connectionParams);
-			return null;
-		}
-	}
-	writeItems(arg, value, cb) {
-		var self = this, i;
-		outputLog("Preparing to WRITE " + arg + " to value " + value, 0, self.connectionID);
-		if (self.isWriting() || self.writeInQueue) {
-			outputLog("You must wait until all previous writes have finished before scheduling another. ", 0, self.connectionID);
-			return 1; // Watch for this in your code - 1 means it hasn't actually entered into the queue.
+			self.maxPDU = self.requestMaxPDU;
 		}
 
-		if (typeof cb === "function") {
-			self.writeDoneCallback = cb;
-		} else {
-			self.writeDoneCallback = doNothing;
-		}
-
-		self.instantWriteBlockList = []; // Initialize the array.
-
-		if (typeof arg === "string") {
-			self.instantWriteBlockList.push(stringToS7Addr(self.translationCB(arg), arg, self.connectionParams));
-			if (typeof (self.instantWriteBlockList[self.instantWriteBlockList.length - 1]) !== "undefined") {
-				self.instantWriteBlockList[self.instantWriteBlockList.length - 1].writeValue = value;
-			}
-		} else if (Array.isArray(arg) && Array.isArray(value) && (arg.length == value.length)) {
-			for (i = 0; i < arg.length; i++) {
-				if (typeof arg[i] === "string") {
-					self.instantWriteBlockList.push(stringToS7Addr(self.translationCB(arg[i]), arg[i], self.connectionParams));
-					if (typeof (self.instantWriteBlockList[self.instantWriteBlockList.length - 1]) !== "undefined") {
-						self.instantWriteBlockList[self.instantWriteBlockList.length - 1].writeValue = value[i];
-					}
-				}
-			}
-		}
-
-		// Validity check.
-		for (i = self.instantWriteBlockList.length - 1; i >= 0; i--) {
-			if (self.instantWriteBlockList[i] === undefined) {
-				self.instantWriteBlockList.splice(i, 1);
-				outputLog("Dropping an undefined write item.");
-			}
-		}
-		self.prepareWritePacket();
-		if (!self.isReading()) {
-			self.sendWritePacket();
-		} else {
-			if (self.writeInQueue) {
-				outputLog("Write was already in queue - should be prevented above", 1, self.connectionID);
-			}
-			self.writeInQueue = true;
-			outputLog("Adding write to queue");
-		}
-		return 0;
-	}
-	findItem(useraddr) {
-		var self = this, i;
-		var commstate = { value: self.isoConnectionState !== 4, quality: 'OK' };
-		if (useraddr === '_COMMERR') { return commstate; }
-		for (i = 0; i < self.polledReadBlockList.length; i++) {
-			if (self.polledReadBlockList[i].useraddr === useraddr) { return self.polledReadBlockList[i]; }
-		}
-		return undefined;
-	}
-	addItems(arg) {
-		var self = this;
-		self.addRemoveArray.push({ arg: arg, action: 'add' });
-	}
-	addItemsNow(arg) {
-		var self = this, i;
-		outputLog("Adding " + arg, 0, self.connectionID);
-		if (typeof (arg) === "string" && arg !== "_COMMERR") {
-			self.polledReadBlockList.push(stringToS7Addr(self.translationCB(arg), arg, self.connectionParams));
-		} else if (Array.isArray(arg)) {
-			for (i = 0; i < arg.length; i++) {
-				if (typeof (arg[i]) === "string" && arg[i] !== "_COMMERR") {
-					self.polledReadBlockList.push(stringToS7Addr(self.translationCB(arg[i]), arg[i], self.connectionParams));
-				}
-			}
-		}
-
-		// Validity check.
-		for (i = self.polledReadBlockList.length - 1; i >= 0; i--) {
-			if (self.polledReadBlockList[i] === undefined) {
-				self.polledReadBlockList.splice(i, 1);
-				outputLog("Dropping an undefined request item.", 0, self.connectionID);
-			}
-		}
-		//	self.prepareReadPacket();
-		self.readPacketValid = false;
-	}
-	removeItems(arg) {
-		var self = this;
-		self.addRemoveArray.push({ arg: arg, action: 'remove' });
-	}
-	removeItemsNow(arg) {
-		var self = this, i;
-		if (typeof arg === "undefined") {
-			self.polledReadBlockList = [];
-		} else if (typeof arg === "string") {
-			for (i = 0; i < self.polledReadBlockList.length; i++) {
-				outputLog('TCBA ' + self.translationCB(arg));
-				if (self.polledReadBlockList[i].addr === self.translationCB(arg)) {
-					outputLog('Splicing');
-					self.polledReadBlockList.splice(i, 1);
-				}
-			}
-		} else if (Array.isArray(arg)) {
-			for (i = 0; i < self.polledReadBlockList.length; i++) {
-				for (var j = 0; j < arg.length; j++) {
-					if (self.polledReadBlockList[i].addr === self.translationCB(arg[j])) {
-						self.polledReadBlockList.splice(i, 1);
-					}
-				}
-			}
-		}
-		self.readPacketValid = false;
-		//	self.prepareReadPacket();
-	}
-	readAllItems(arg) {
-		var self = this;
-
-		outputLog("Reading All Items (readAllItems was called)", 1, self.connectionID);
-
-		if (typeof arg === "function") {
-			self.readDoneCallback = arg;
-		} else {
-			self.readDoneCallback = doNothing;
-		}
-
-		if (self.isoConnectionState !== 4) {
-			outputLog("Unable to read when not connected. Return bad values.", 0, self.connectionID);
-		} // For better behaviour when auto-reconnecting - don't return now
-
-
-		// Check if ALL are done...  You might think we could look at parallel jobs, and for the most part we can, but if one just finished and we end up here before starting another, it's bad.
-		if (self.isWaiting()) {
-			outputLog("Waiting to read for all R/W operations to complete.  Will re-trigger readAllItems in 100ms.", 0, self.connectionID);
-			clearTimeout(self.rereadTimer);
-			self.rereadTimer = setTimeout(function () {
-				self.rereadTimer = undefined; //already fired, can safely discard
-				self.readAllItems.apply(self, arguments);
-			}, 100, arg);
-			return;
-		}
-
-		// Now we check the array of adding and removing things.  Only now is it really safe to do this.
-		self.addRemoveArray.forEach(function (element) {
-			outputLog('Adding or Removing ' + format(element), 1, self.connectionID);
-			if (element.action === 'remove') {
-				self.removeItemsNow(element.arg);
-			}
-			if (element.action === 'add') {
-				self.addItemsNow(element.arg);
-			}
-		});
-
-		self.addRemoveArray = []; // Clear for next time.
-
-		if (!self.readPacketValid) { self.prepareReadPacket(); }
-
-		// ideally...  incrementSequenceNumbers();
-		outputLog("Calling SRP from RAI", 1, self.connectionID);
-		self.sendReadPacket(); // Note this sends the first few read packets depending on parallel connection restrictions.
-	}
-	isWaiting() {
-		var self = this;
-		return (self.isReading() || self.isWriting());
-	}
-	isReading() {
-		var self = this, i;
-		// Walk through the array and if any packets are marked as sent, it means we haven't received our final confirmation.
-		for (i = 0; i < self.readPacketArray.length; i++) {
-			if (self.readPacketArray[i].sent === true) { return true; }
-		}
-		return false;
-	}
-	isWriting() {
-		var self = this, i;
-		// Walk through the array and if any packets are marked as sent, it means we haven't received our final confirmation.
-		for (i = 0; i < self.writePacketArray.length; i++) {
-			if (self.writePacketArray[i].sent === true) { return true; }
-		}
-		return false;
-	}
-	clearReadPacketTimeouts() {
-		var self = this, i;
-		outputLog('Clearing read PacketTimeouts', 1, self.connectionID);
-		// Before we initialize the self.readPacketArray, we need to loop through all of them and clear timeouts.
-		for (i = 0; i < self.readPacketArray.length; i++) {
-			clearTimeout(self.readPacketArray[i].timeout);
-			self.readPacketArray[i].sent = false;
-			self.readPacketArray[i].rcvd = false;
-		}
-	}
-	clearWritePacketTimeouts() {
-		var self = this, i;
-		outputLog('Clearing write PacketTimeouts', 1, self.connectionID);
-		// Before we initialize the self.readPacketArray, we need to loop through all of them and clear timeouts.
-		for (i = 0; i < self.writePacketArray.length; i++) {
-			clearTimeout(self.writePacketArray[i].timeout);
-			self.writePacketArray[i].sent = false;
-			self.writePacketArray[i].rcvd = false;
-		}
-	}
-	prepareWritePacket() {
-		var self = this, i;
-		var itemList = self.instantWriteBlockList;
-		var requestList = []; // The request list consists of the block list, split into chunks readable by PDU.
-		var requestNumber = 0;
-
-		// Sort the items using the sort function, by type and offset.
-		itemList.sort(itemListSorter);
-
-		// Just exit if there are no items.
-		if (itemList.length === 0) {
-			return undefined;
-		}
-
-		// Reinitialize the WriteBlockList
-		self.globalWriteBlockList = [];
-
-		// At this time we do not do write optimizations.
-		// The reason for this is it is would cause numerous issues depending how the code was written in the PLC.
-		// If we write M0.1 and M0.2 then to optimize we would have to write MB0, which also writes 0.0, 0.3, 0.4...
-		//
-		// I suppose when working with integers, if we write MW0 and MW2, we could write these as one block.
-		// But if you really, really want the program to do that, write an array yourself.
-		self.globalWriteBlockList[0] = itemList[0];
-		self.globalWriteBlockList[0].itemReference = [];
-		self.globalWriteBlockList[0].itemReference.push(itemList[0]);
-
-		var thisBlock = 0;
-		itemList[0].block = thisBlock;
-		var maxByteRequest = 4 * Math.floor((self.maxPDU - 18 - 12) / 4); // Absolutely must not break a real array into two requests.  Maybe we can extend by two bytes when not DINT/REAL/INT.  But modified now for LREAL.
-		maxByteRequest = 8 * Math.floor((self.maxPDU - 18 - 12) / 8);
-		//	outputLog("Max Write Length is " + maxByteRequest);
-		// Just push the items into blocks and figure out the write buffers
-		for (i = 0; i < itemList.length; i++) {
-			self.globalWriteBlockList[i] = itemList[i]; // Remember - by reference.
-			self.globalWriteBlockList[i].isOptimized = false;
-			self.globalWriteBlockList[i].itemReference = [];
-			self.globalWriteBlockList[i].itemReference.push(itemList[i]);
-			bufferizeS7Item(itemList[i]);
-		}
-
-		var thisRequest = 0;
-
-		// Split the blocks into requests, if they're too large.
-		for (i = 0; i < self.globalWriteBlockList.length; i++) {
-			var startByte = self.globalWriteBlockList[i].offset;
-			var remainingLength = self.globalWriteBlockList[i].byteLength;
-			var lengthOffset = 0;
-
-			// Always create a request for a self.globalReadBlockList.
-			requestList[thisRequest] = self.globalWriteBlockList[i].clone();
-
-			// How many parts?
-			self.globalWriteBlockList[i].parts = Math.ceil(self.globalWriteBlockList[i].byteLength / maxByteRequest);
-			//		outputLog("self.globalWriteBlockList " + i + " parts is " + self.globalWriteBlockList[i].parts + " offset is " + self.globalWriteBlockList[i].offset + " MBR is " + maxByteRequest);
-			self.globalWriteBlockList[i].requestReference = [];
-
-			// If we're optimized...
-			for (var j = 0; j < self.globalWriteBlockList[i].parts; j++) {
-				requestList[thisRequest] = self.globalWriteBlockList[i].clone();
-				self.globalWriteBlockList[i].requestReference.push(requestList[thisRequest]);
-				requestList[thisRequest].offset = startByte;
-				requestList[thisRequest].byteLength = Math.min(maxByteRequest, remainingLength);
-				requestList[thisRequest].byteLengthWithFill = requestList[thisRequest].byteLength;
-				if (requestList[thisRequest].byteLengthWithFill % 2) { requestList[thisRequest].byteLengthWithFill += 1; }
-
-				// max
-				requestList[thisRequest].writeBuffer = self.globalWriteBlockList[i].writeBuffer.slice(lengthOffset, lengthOffset + requestList[thisRequest].byteLengthWithFill);
-				requestList[thisRequest].writeQualityBuffer = self.globalWriteBlockList[i].writeQualityBuffer.slice(lengthOffset, lengthOffset + requestList[thisRequest].byteLengthWithFill);
-				lengthOffset += self.globalWriteBlockList[i].requestReference[j].byteLength;
-
-				if (self.globalWriteBlockList[i].parts > 1) {
-					requestList[thisRequest].datatype = 'BYTE';
-					requestList[thisRequest].dtypelen = 1;
-					requestList[thisRequest].arrayLength = requestList[thisRequest].byteLength; //self.globalReadBlockList[thisBlock].byteLength;		(This line shouldn't be needed anymore - shouldn't matter)
-				}
-				remainingLength -= maxByteRequest;
-				thisRequest++;
-				startByte += maxByteRequest;
-			}
-		}
-
-		self.clearWritePacketTimeouts();
-		self.writePacketArray = [];
-
-		//	outputLog("GWBL is " + self.globalWriteBlockList.length);
-		// Before we initialize the self.writePacketArray, we need to loop through all of them and clear timeouts.
-		// The packetizer...
-		while (requestNumber < requestList.length) {
-			// Set up the read packet
-			// Yes this is the same master sequence number shared with the read queue
-			var numItems = 0;
-
-			// Maybe this shouldn't really be here?
-			self.writeReqHeader.copy(self.writeReq, 0);
-
-			// Packet's length
-			var packetWriteLength = 10 + 4; // 10 byte header and 4 byte param header
-
-			self.writePacketArray.push(new S7Packet());
-			var thisPacketNumber = self.writePacketArray.length - 1;
-			self.writePacketArray[thisPacketNumber].seqNum = self.getNextSeqNum();
-			//		outputLog("Write Sequence Number is " + self.writePacketArray[thisPacketNumber].seqNum);
-			self.writePacketArray[thisPacketNumber].itemList = []; // Initialize as array.
-
-			for (i = requestNumber; i < requestList.length; i++) {
-				//outputLog("Number is " + (requestList[i].byteLengthWithFill + 4 + packetReplyLength));
-				if (requestList[i].byteLengthWithFill + 12 + 4 + packetWriteLength > self.maxPDU) { // 12 byte header for each item and 4 bytes for the data header
-					if (numItems === 0) {
-						outputLog("breaking when we shouldn't, byte length with fill is  " + requestList[i].byteLengthWithFill + " max byte request " + maxByteRequest, 0, self.connectionID);
-						throw new Error("Somehow write request didn't split properly - exiting.  Report this as a bug.");
-					}
-					break; // We can't fit this packet in here.
-				}
-				requestNumber++;
-				numItems++;
-				packetWriteLength += (requestList[i].byteLengthWithFill + 12 + 4); // Don't forget each request has a 12 byte header as well.
-
-
-
-
-
-				//outputLog('I is ' + i + ' Addr Type is ' + requestList[i].addrtype + ' and type is ' + requestList[i].datatype + ' and DBNO is ' + requestList[i].dbNumber + ' and offset is ' + requestList[i].offset + ' bit ' + requestList[i].bitOffset + ' len ' + requestList[i].arrayLength);
-				//S7AddrToBuffer(requestList[i]).copy(self.writeReq, 19 + numItems * 12);  // i or numItems?  used to be i.
-				//itemBuffer = bufferizeS7Packet(requestList[i]);
-				//itemBuffer.copy(dataBuffer, dataBufferPointer);
-				//dataBufferPointer += itemBuffer.length;
-				self.writePacketArray[thisPacketNumber].itemList.push(requestList[i]);
-			}
-			//		dataBuffer.copy(self.writeReq, 19 + (numItems + 1) * 12, 0, dataBufferPointer - 1);
-		}
-	}
-	prepareReadPacket() {
-		var self = this, i;
-		// Note that for a PDU size of 240, the MOST bytes we can request depends on the number of items.
-		// To figure this out, allow for a 247 byte packet.  7 TPKT+COTP header doesn't count for PDU, so 240 bytes of "S7 data".
-		// In the response you ALWAYS have a 12 byte S7 header.
-		// Then you have a 2 byte parameter header.
-		// Then you have a 4 byte "item header" PER ITEM.
-		// So you have overhead of 18 bytes for one item, 22 bytes for two items, 26 bytes for 3 and so on.  So for example you can request 240 - 22 = 218 bytes for two items.
-		// We can calculate a max byte length for single request as 4*Math.floor((self.maxPDU - 18)/4) - to ensure we don't cross boundaries.
-		var itemList = self.polledReadBlockList; // The items are the actual items requested by the user
-		var requestList = []; // The request list consists of the block list, split into chunks readable by PDU.
-
-
-		// Validity check.
-		for (i = itemList.length - 1; i >= 0; i--) {
-			if (itemList[i] === undefined) {
-				itemList.splice(i, 1);
-				outputLog("Dropping an undefined request item.", 0, self.connectionID);
-			}
-		}
-
-		// Sort the items using the sort function, by type and offset.
-		itemList.sort(itemListSorter);
-
-		// Just exit if there are no items.
-		if (itemList.length === 0) {
-			return undefined;
-		}
-
-		self.globalReadBlockList = [];
-
-		// ...because you have to start your optimization somewhere.
-		self.globalReadBlockList[0] = itemList[0];
-		self.globalReadBlockList[0].itemReference = [];
-		self.globalReadBlockList[0].itemReference.push(itemList[0]);
-
-		var thisBlock = 0;
-		itemList[0].block = thisBlock;
-		var maxByteRequest = 4 * Math.floor((self.maxPDU - 18) / 4); // Absolutely must not break a real array into two requests.  Maybe we can extend by two bytes when not DINT/REAL/INT.
-
-
-		// Optimize the items into blocks
-		for (i = 1; i < itemList.length; i++) {
-			// Skip T, C, P types
-			if ((itemList[i].areaS7Code !== self.globalReadBlockList[thisBlock].areaS7Code) || // Can't optimize between areas
-				(itemList[i].dbNumber !== self.globalReadBlockList[thisBlock].dbNumber) || // Can't optimize across DBs
-				(!self.isOptimizableArea(itemList[i].areaS7Code)) || // Can't optimize T,C (I don't think) and definitely not P.
-				((itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength) > maxByteRequest) || // If this request puts us over our max byte length, create a new block for consistency reasons.
-				(itemList[i].offset - (self.globalReadBlockList[thisBlock].offset + self.globalReadBlockList[thisBlock].byteLength) > self.maxGap)) { // If our gap is large, create a new block.
-
-				outputLog("Skipping optimization of item " + itemList[i].addr, 0, self.connectionID);
-
-				// At this point we give up and create a new block.
-				thisBlock = thisBlock + 1;
-				self.globalReadBlockList[thisBlock] = itemList[i]; // By reference.
-
-				//				itemList[i].block = thisBlock; // Don't need to do this.
-				self.globalReadBlockList[thisBlock].isOptimized = false;
-				self.globalReadBlockList[thisBlock].itemReference = [];
-				self.globalReadBlockList[thisBlock].itemReference.push(itemList[i]);
-			} else {
-				outputLog("Attempting optimization of item " + itemList[i].addr + " with " + self.globalReadBlockList[thisBlock].addr, 0, self.connectionID);
-				// This next line checks the maximum.
-				// Think of this situation - we have a large request of 40 bytes starting at byte 10.
-				//	Then someone else wants one byte starting at byte 12.  The block length doesn't change.
-				//
-				// But if we had 40 bytes starting at byte 10 (which gives us byte 10-49) and we want byte 50, our byte length is 50-10 + 1 = 41.
-				self.globalReadBlockList[thisBlock].byteLength = Math.max(self.globalReadBlockList[thisBlock].byteLength, itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength);
-
-				// Point the buffers (byte and quality) to a sliced version of the optimized block.  This is by reference (same area of memory)
-				itemList[i].byteBuffer = self.globalReadBlockList[thisBlock].byteBuffer.slice(itemList[i].offset - self.globalReadBlockList[thisBlock].offset, itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength);
-				itemList[i].qualityBuffer = self.globalReadBlockList[thisBlock].qualityBuffer.slice(itemList[i].offset - self.globalReadBlockList[thisBlock].offset, itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength);
-
-				// For now, change the request type here, and fill in some other things.
-				// I am not sure we want to do these next two steps.
-				// It seems like things get screwed up when we do this.
-				// Since self.globalReadBlockList[thisBlock] exists already at this point, and our buffer is already set, let's not do this now.
-				// self.globalReadBlockList[thisBlock].datatype = 'BYTE';
-				// self.globalReadBlockList[thisBlock].dtypelen = 1;
-				self.globalReadBlockList[thisBlock].isOptimized = true;
-				self.globalReadBlockList[thisBlock].itemReference.push(itemList[i]);
-			}
-		}
-
-		var thisRequest = 0;
-
-		//	outputLog("Preparing the read packet...");
-		// Split the blocks into requests, if they're too large.
-		for (i = 0; i < self.globalReadBlockList.length; i++) {
-			// Always create a request for a self.globalReadBlockList.
-			requestList[thisRequest] = self.globalReadBlockList[i].clone();
-
-			// How many parts?
-			self.globalReadBlockList[i].parts = Math.ceil(self.globalReadBlockList[i].byteLength / maxByteRequest);
-			outputLog("self.globalReadBlockList " + i + " parts is " + self.globalReadBlockList[i].parts + " offset is " + self.globalReadBlockList[i].offset + " MBR is " + maxByteRequest, 1, self.connectionID);
-			var startByte = self.globalReadBlockList[i].offset;
-			var remainingLength = self.globalReadBlockList[i].byteLength;
-
-			self.globalReadBlockList[i].requestReference = [];
-
-			// If we're optimized...
-			for (var j = 0; j < self.globalReadBlockList[i].parts; j++) {
-				requestList[thisRequest] = self.globalReadBlockList[i].clone();
-				self.globalReadBlockList[i].requestReference.push(requestList[thisRequest]);
-				//outputLog(self.globalReadBlockList[i]);
-				//outputLog(self.globalReadBlockList.slice(i,i+1));
-				requestList[thisRequest].offset = startByte;
-				requestList[thisRequest].byteLength = Math.min(maxByteRequest, remainingLength);
-				requestList[thisRequest].byteLengthWithFill = requestList[thisRequest].byteLength;
-				if (requestList[thisRequest].byteLengthWithFill % 2) { requestList[thisRequest].byteLengthWithFill += 1; }
-				// Just for now...
-				if (self.globalReadBlockList[i].parts > 1) {
-					requestList[thisRequest].datatype = 'BYTE';
-					requestList[thisRequest].dtypelen = 1;
-					requestList[thisRequest].arrayLength = requestList[thisRequest].byteLength; //self.globalReadBlockList[thisBlock].byteLength;
-				}
-				remainingLength -= maxByteRequest;
-				thisRequest++;
-				startByte += maxByteRequest;
-			}
-		}
-
-		//requestList[5].offset = 243;
-		//	requestList = self.globalReadBlockList;
-		// The packetizer...
-		var requestNumber = 0;
-
-		self.clearReadPacketTimeouts();
-		self.readPacketArray = [];
-
-		while (requestNumber < requestList.length) {
-
-			var numItems = 0;
-			self.readReqHeader.copy(self.readReq, 0);
-
-			// Packet's expected reply length
-			var packetReplyLength = 12 + 2; //
-			var packetRequestLength = 12; //s7 header and parameter header
-
-			self.readPacketArray.push(new S7Packet());
-			var thisPacketNumber = self.readPacketArray.length - 1;
-			// don't set a fixed sequence number here. Instead, set it just before sending to avoid conflict with write sequence numbers
-			self.readPacketArray[thisPacketNumber].seqNum = 0;
-			self.readPacketArray[thisPacketNumber].itemList = []; // Initialize as array.
-
-			for (i = requestNumber; i < requestList.length; i++) {
-				//outputLog("Number is " + (requestList[i].byteLengthWithFill + 4 + packetReplyLength));
-				if (requestList[i].byteLengthWithFill + 4 + packetReplyLength > self.maxPDU || packetRequestLength + 12 > self.maxPDU) {
-					outputLog("Splitting request: " + numItems + " items, requestLength would be " + (packetRequestLength + 12) + ", replyLength would be " + (requestList[i].byteLengthWithFill + 4 + packetReplyLength) + ", PDU is " + self.maxPDU, 1, self.connectionID);
-					if (numItems === 0) {
-						outputLog("breaking when we shouldn't, rlibl " + requestList[i].byteLengthWithFill + " MBR " + maxByteRequest, 0, self.connectionID);
-						throw new Error("Somehow write request didn't split properly - exiting.  Report this as a bug.");
-					}
-					break; // We can't fit this packet in here.
-				}
-				requestNumber++;
-				numItems++;
-				packetReplyLength += (requestList[i].byteLengthWithFill + 4);
-				packetRequestLength += 12;
-				//outputLog('I is ' + i + ' Addr Type is ' + requestList[i].addrtype + ' and type is ' + requestList[i].datatype + ' and DBNO is ' + requestList[i].dbNumber + ' and offset is ' + requestList[i].offset + ' bit ' + requestList[i].bitOffset + ' len ' + requestList[i].arrayLength);
-				// skip this for now S7AddrToBuffer(requestList[i]).copy(self.readReq, 19 + numItems * 12);  // i or numItems?
-				self.readPacketArray[thisPacketNumber].itemList.push(requestList[i]);
-			}
-		}
-		self.readPacketValid = true;
-	}
-	sendReadPacket() {
-		var self = this, i, j, flagReconnect = false;
-
-		outputLog("SendReadPacket called", 1, self.connectionID);
-
-		if (!self.readPacketArray.length && (typeof (self.readDoneCallback) === "function")) {
-			// Call back the callback if we are being asked for zero tags - for consistency
-			self.readDoneCallback(false, {}); // Data is second argument and shouldn't be undefined
-		}
-
-		for (i = 0; i < self.readPacketArray.length; i++) {
-			if (self.readPacketArray[i].sent) { continue; }
-			if (self.parallelJobsNow >= self.maxParallel) { continue; }
-
-			// Set sequence number of packet here
-			self.readPacketArray[i].seqNum = self.getNextSeqNum();
-
-			// From here down is SENDING the packet
-			self.readPacketArray[i].reqTime = process.hrtime();
-			self.readReq.writeUInt8(self.readPacketArray[i].itemList.length, 18);
-			self.readReq.writeUInt16BE(19 + self.readPacketArray[i].itemList.length * 12, 2); // buffer length
-			self.readReq.writeUInt16BE(self.readPacketArray[i].seqNum, 11);
-			self.readReq.writeUInt16BE(self.readPacketArray[i].itemList.length * 12 + 2, 13); // Parameter length - 14 for one read, 28 for 2.
-
-			for (j = 0; j < self.readPacketArray[i].itemList.length; j++) {
-				S7AddrToBuffer(self.readPacketArray[i].itemList[j], false).copy(self.readReq, 19 + j * 12);
-			}
-
-			if (self.isoConnectionState == 4) {
-				outputLog('Sending Read Packet With Sequence Number ' + self.readPacketArray[i].seqNum, 1, self.connectionID);
-
-				self.readPacketArray[i].timeout = setTimeout(function () {
-					self.packetTimeout.apply(self, arguments);
-				}, self.globalTimeout, "read", self.readPacketArray[i].seqNum);
-				self.isoclient.write(self.readReq.slice(0, 19 + self.readPacketArray[i].itemList.length * 12)); // was 31
-				self.readPacketArray[i].sent = true;
-				self.readPacketArray[i].rcvd = false;
-				self.readPacketArray[i].timeoutError = false;
-				self.parallelJobsNow += 1;
-			} else {
-				//			outputLog('Somehow got into read block without proper self.isoConnectionState of 3.  Disconnect.');
-				//			self.isoclient.end();
-				//			setTimeout(function(){
-				//				self.connectNow.apply(self, arguments);
-				//			}, 2000, self.connectionParams);
-				// self.parallelJobsNow += 1;  // Note that we don't do this here - we want all packets to time out at once when not connected. 
-				self.readPacketArray[i].sent = true;
-				self.readPacketArray[i].rcvd = false;
-				self.readPacketArray[i].timeoutError = true;
-				if (!flagReconnect) {
-					// Prevent duplicates
-					outputLog('Not Sending Read Packet because we are not connected - ISO CS is ' + self.isoConnectionState, 0, self.connectionID);
-				}
-				// This is essentially an instantTimeout.
-				if (self.isoConnectionState === 0) {
-					flagReconnect = true;
-				}
-				outputLog('Requesting PacketTimeout Due to ISO CS NOT 4 - READ SN ' + self.readPacketArray[i].seqNum, 1, self.connectionID);
-				self.readPacketArray[i].timeout = setTimeout(function () {
-					self.packetTimeout.apply(self, arguments);
-				}, 0, "read", self.readPacketArray[i].seqNum);
-			}
-		}
-
-		/* NOTE: We no longer do this here.
-		Reconnects are done on the response that we will get from the above packets.
-		Reason: We could have some packets waiting for timeout from the PLC, and others coming back instantly.
-			if (flagReconnect) {
-				//		console.log("Asking for callback next tick and my ID is " + self.connectionID);
-				clearTimeout(self.reconnectTimer)
-				self.reconnectTimer = setTimeout(function() {
-					//			console.log("Next tick is here and my ID is " + self.connectionID);
-					outputLog("The scheduled reconnect from sendReadPacket is happening now", 1, self.connectionID);
-					self.connectNow(self.connectionParams);  // We used to do this NOW - not NextTick() as we need to mark isoConnectionState as 1 right now.  Otherwise we queue up LOTS of connects and crash.
-				}, 0);
-			}
-		*/
-	}
-	sendWritePacket() {
-		var self = this, i, dataBuffer, itemBuffer, dataBufferPointer, flagReconnect;
-
-		dataBuffer = Buffer.alloc(8192);
-
-		self.writeInQueue = false;
-
-		for (i = 0; i < self.writePacketArray.length; i++) {
-			if (self.writePacketArray[i].sent) { continue; }
-			if (self.parallelJobsNow >= self.maxParallel) { continue; }
-			// From here down is SENDING the packet
-			self.writePacketArray[i].reqTime = process.hrtime();
-			self.writeReq.writeUInt8(self.writePacketArray[i].itemList.length, 18);
-			self.writeReq.writeUInt16BE(self.writePacketArray[i].seqNum, 11);
-
-			dataBufferPointer = 0;
-			for (var j = 0; j < self.writePacketArray[i].itemList.length; j++) {
-				S7AddrToBuffer(self.writePacketArray[i].itemList[j], true).copy(self.writeReq, 19 + j * 12);
-				itemBuffer = getWriteBuffer(self.writePacketArray[i].itemList[j]);
-				itemBuffer.copy(dataBuffer, dataBufferPointer);
-				dataBufferPointer += itemBuffer.length;
-				// NOTE: It seems that when writing, the data that is sent must have a "fill byte" so that data length is even only for all
-				//  but the last request.  The last request must have no padding.  So we add the padding here.
-				if (j < (self.writePacketArray[i].itemList.length - 1)) {
-					if (itemBuffer.length % 2) {
-						dataBufferPointer += 1;
-					}
-				}
-			}
-
-			//		outputLog('DataBufferPointer is ' + dataBufferPointer);
-			self.writeReq.writeUInt16BE(19 + self.writePacketArray[i].itemList.length * 12 + dataBufferPointer, 2); // buffer length
-			self.writeReq.writeUInt16BE(self.writePacketArray[i].itemList.length * 12 + 2, 13); // Parameter length - 14 for one read, 28 for 2.
-			self.writeReq.writeUInt16BE(dataBufferPointer, 15); // Data length - as appropriate.
-
-			dataBuffer.copy(self.writeReq, 19 + self.writePacketArray[i].itemList.length * 12, 0, dataBufferPointer);
-
-			if (self.isoConnectionState === 4) {
-				//			outputLog('writing' + (19+dataBufferPointer+self.writePacketArray[i].itemList.length*12));
-				self.writePacketArray[i].timeout = setTimeout(function () {
-					self.packetTimeout.apply(self, arguments);
-				}, self.globalTimeout, "write", self.writePacketArray[i].seqNum);
-				self.isoclient.write(self.writeReq.slice(0, 19 + dataBufferPointer + self.writePacketArray[i].itemList.length * 12)); // was 31
-				self.writePacketArray[i].sent = true;
-				self.writePacketArray[i].rcvd = false;
-				self.writePacketArray[i].timeoutError = false;
-				self.parallelJobsNow += 1;
-				outputLog('Sending Write Packet With Sequence Number ' + self.writePacketArray[i].seqNum, 1, self.connectionID);
-			} else {
-				//			outputLog('Somehow got into write block without proper isoConnectionState of 4.  Disconnect.');
-				//			connectionReset();
-				//			setTimeout(connectNow, 2000, connectionParams);
-				// This is essentially an instantTimeout.
-				self.writePacketArray[i].sent = true;
-				self.writePacketArray[i].rcvd = false;
-				self.writePacketArray[i].timeoutError = true;
-
-				// Without the scopePlaceholder, this doesn't work.   writePacketArray[i] becomes undefined.
-				// The reason is that the value i is part of a closure and when seen "nextTick" has the same value
-				// it would have just after the FOR loop is done.
-				// (The FOR statement will increment it to beyond the array, then exit after the condition fails)
-				// scopePlaceholder works as the array is de-referenced NOW, not "nextTick".
-				//dm			var scopePlaceholder = self.writePacketArray[i].seqNum;
-				//dm			process.nextTick(function() {
-				//dm				self.packetTimeout("write", scopePlaceholder);
-				//dm			});
-				self.writePacketArray[i].timeout = setTimeout(function () {
-					self.packetTimeout.apply(self, arguments);
-				}, 0, "write", self.writePacketArray[i].seqNum);
-
-				if (self.isoConnectionState === 0) {
-					flagReconnect = true;
-				}
-			}
-		}
-		/* NOTE: We no longer do this here.
-		Reconnects are done on the response that we will get from the above packets.
-		Reason: We could have some packets waiting for timeout from the PLC, and others coming back instantly.
-			if (flagReconnect) {
-				//		console.log("Asking for callback next tick and my ID is " + self.connectionID);
-				clearTimeout(self.reconnectTimer);
-				self.reconnectTimer = setTimeout(function() {
-					//			console.log("Next tick is here and my ID is " + self.connectionID);
-					outputLog("The scheduled reconnect from sendWritePacket is happening now", 1, self.connectionID);
-					self.connectNow(self.connectionParams);  // We used to do this NOW - not NextTick() as we need to mark isoConnectionState as 1 right now.  Otherwise we queue up LOTS of connects and crash.
-				}, 0);
-			}*/
-	}
-	isOptimizableArea(area) {
-		var self = this;
-
-		if (self.doNotOptimize) { return false; } // Are we skipping all optimization due to user request?
-		switch (area) {
-			case 0x84: // db
-			case 0x81: // input bytes
-			case 0x82: // output bytes
-			case 0x83: // memory bytes
-				return true;
-			default:
-				return false;
-		}
-	}
-	onResponse(theData) {
-		var self = this;
-		// Packet Validity Check.  Note that this will pass even with a "not available" response received from the server.
-		// For length calculation and verification:
-		// data[4] = COTP header length. Normally 2.  This doesn't include the length byte so add 1.
-		// read(13) is parameter length.  Normally 4.
-		// read(14) is data length.  (Includes item headers)
-		// 12 is length of "S7 header"
-		// Then we need to add 4 for TPKT header.
-		// Decrement our parallel jobs now
-		// NOT SO FAST - can't do this here.  If we time out, then later get the reply, we can't decrement this twice.  Or the CPU will not like us.  Do it if not rcvd.  self.parallelJobsNow--;
-		// hotfix for #78, prevents RangeErrors for undersized packets
-		if (!(theData && theData.length > 6)) {
-			outputLog('INVALID READ RESPONSE - DISCONNECTING');
-			outputLog("The incoming packet doesn't have the required minimum length of 7 bytes");
-			outputLog(theData);
-			self.connectionReset();
-			return;
-		}
-
-		var data = checkRFCData(theData);
-
-		if (data === "fastACK") {
-			//read again and wait for the requested data
-			outputLog('Fast Acknowledge received.', 0, self.connectionID);
-			self.isoclient.removeAllListeners('error');
-			self.isoclient.removeAllListeners('data');
-			self.isoclient.on('data', function () {
-				self.onResponse.apply(self, arguments);
-			});
-			self.isoclient.on('error', function () {
-				self.readWriteError.apply(self, arguments);
-			});
-		} else if (data[7] === 0x32) { //check the validy of FA+S7 package
-			//*********************   VALIDY CHECK ***********************************
-			//TODO: Check S7-Header properly
-			if (data.length > 8 && data[8] != 3) {
-				outputLog('PDU type (byte 8) was returned as ' + data[8] + ' where the response PDU of 3 was expected.');
-				outputLog('Maybe you are requesting more than 240 bytes of data in a packet?');
-				outputLog(data);
-				self.connectionReset();
-				return null;
-			}
-			// The smallest read packet will pass a length check of 25.  For a 1-item write response with no data, length will be 22.
-			if (data.length > data.readInt16BE(2)) {
-				outputLog("An oversize packet was detected.  Excess length is " + (data.length - data.readInt16BE(2)) + ".  ");
-				outputLog("We assume this is because two packets were sent at nearly the same time by the PLC.");
-				outputLog("We are slicing the buffer and scheduling the second half for further processing next loop.");
-				setTimeout(function () {
-					self.onResponse.apply(self, arguments);
-				}, 0, data.slice(data.readInt16BE(2))); // This re-triggers this same function with the sliced-up buffer.
-
-				// was used as a test		setTimeout(process.exit, 2000);
-			}
-
-			if (data.length < data.readInt16BE(2) || data.readInt16BE(2) < 22 || data[5] !== 0xf0 || data[4] + 1 + 12 + 4 + data.readInt16BE(13) + data.readInt16BE(15) !== data.readInt16BE(2) || !(data[6] >> 7) || (data[7] !== 0x32) || (data[8] !== 3)) {
-				outputLog('INVALID READ RESPONSE - DISCONNECTING');
-				outputLog('TPKT Length From Header is ' + data.readInt16BE(2) + ' and RCV buffer length is ' + data.length + ' and COTP length is ' + data.readUInt8(4) + ' and data[6] is ' + data[6]);
-				outputLog(data);
-				self.connectionReset();
-				return null;
-			}
-
-			//**********************   GO ON  *************************
-			// Log the receive
-			outputLog('Received ' + data.readUInt16BE(15) + ' bytes of S7-data from PLC.  Sequence number is ' + data.readUInt16BE(11), 1, self.connectionID);
-
-			// Check the sequence number
-			var foundSeqNum; // self.readPacketArray.length - 1;
-			var isReadResponse, isWriteResponse;
-
-			//	for (packetCount = 0; packetCount < self.readPacketArray.length; packetCount++) {
-			//		if (self.readPacketArray[packetCount].seqNum == data.readUInt16BE(11)) {
-			//			foundSeqNum = packetCount;
-			//			break;
-			//		}
-			//	}
-			foundSeqNum = self.findReadIndexOfSeqNum(data.readUInt16BE(11));
-
-			//	if (self.readPacketArray[packetCount] == undefined) {
-			if (foundSeqNum === undefined) {
-				foundSeqNum = self.findWriteIndexOfSeqNum(data.readUInt16BE(11));
-				if (foundSeqNum !== undefined) {
-					//		for (packetCount = 0; packetCount < self.writePacketArray.length; packetCount++) {
-					//			if (self.writePacketArray[packetCount].seqNum == data.readUInt16BE(11)) {
-					//				foundSeqNum = packetCount;
-					self.writeResponse(data, foundSeqNum);
-					isWriteResponse = true;
-					//				break;
-				}
-
-
-			} else {
-				isReadResponse = true;
-				self.readResponse(data, foundSeqNum);
-			}
-
-			if ((!isReadResponse) && (!isWriteResponse)) {
-				outputLog("Sequence number that arrived wasn't a write reply either - dropping");
-				outputLog(data);
-				// 	I guess this isn't a showstopper, just ignore it.
-				//		self.isoclient.end();
-				//		setTimeout(self.connectNow, 2000, self.connectionParams);
-				return null;
-			}
-
-		} else {
-			outputLog('INVALID READ RESPONSE - DISCONNECTING');
-			outputLog('TPKT Length From Header is ' + theData.readInt16BE(2) + ' and RCV buffer length is ' + theData.length + ' and COTP length is ' + theData.readUInt8(4) + ' and data[6] is ' + theData[6]);
-			outputLog(theData);
-			self.connectionReset();
-			return null;
-		}
-
-	}
-	findReadIndexOfSeqNum(seqNum) {
-		var self = this, packetCounter;
-		for (packetCounter = 0; packetCounter < self.readPacketArray.length; packetCounter++) {
-			if (self.readPacketArray[packetCounter].seqNum == seqNum) {
-				return packetCounter;
-			}
-		}
-		return undefined;
-	}
-	findWriteIndexOfSeqNum(seqNum) {
-		var self = this, packetCounter;
-		for (packetCounter = 0; packetCounter < self.writePacketArray.length; packetCounter++) {
-			if (self.writePacketArray[packetCounter].seqNum == seqNum) {
-				return packetCounter;
-			}
-		}
-		return undefined;
-	}
-	writeResponse(data, foundSeqNum) {
-		var self = this, dataPointer = 21, i, anyBadQualities;
-
-		for (var itemCount = 0; itemCount < self.writePacketArray[foundSeqNum].itemList.length; itemCount++) {
-			//		outputLog('Pointer is ' + dataPointer);
-			dataPointer = processS7WriteItem(data, self.writePacketArray[foundSeqNum].itemList[itemCount], dataPointer);
-			if (!dataPointer) {
-				outputLog('Stopping Processing Write Response Packet due to unrecoverable packet error');
-				break;
-			}
-		}
-
-		// Make a note of the time it took the PLC to process the request.
-		self.writePacketArray[foundSeqNum].reqTime = process.hrtime(self.writePacketArray[foundSeqNum].reqTime);
-		outputLog('Time is ' + self.writePacketArray[foundSeqNum].reqTime[0] + ' seconds and ' + Math.round(self.writePacketArray[foundSeqNum].reqTime[1] * 10 / 1e6) / 10 + ' ms.', 1, self.connectionID);
-
-		//	self.writePacketArray.splice(foundSeqNum, 1);
-		if (!self.writePacketArray[foundSeqNum].rcvd) {
-			self.writePacketArray[foundSeqNum].rcvd = true;
-			self.parallelJobsNow--;
-		}
-		clearTimeout(self.writePacketArray[foundSeqNum].timeout);
-
-		if (!self.writePacketArray.every(doneSending)) {
-			outputLog("Not done sending - sending more packets from writeResponse", 1, self.connectionID);
-			self.sendWritePacket();
-		} else {
-			outputLog("Received all packets in writeResponse", 1, self.connectionID);
-			for (i = 0; i < self.writePacketArray.length; i++) {
-				self.writePacketArray[i].sent = false;
-				self.writePacketArray[i].rcvd = false;
-			}
-
-			anyBadQualities = false;
-
-			for (i = 0; i < self.globalWriteBlockList.length; i++) {
-				// Post-process the write code and apply the quality.
-				// Loop through the global block list...
-				writePostProcess(self.globalWriteBlockList[i]);
-				for (var k = 0; k < self.globalWriteBlockList[i].itemReference.length; k++) {
-					outputLog(self.globalWriteBlockList[i].itemReference[k].addr + ' write completed with quality ' + self.globalWriteBlockList[i].itemReference[k].writeQuality, 0, self.connectionID);
-					if (!isQualityOK(self.globalWriteBlockList[i].itemReference[k].writeQuality)) {
-						anyBadQualities = true;
-					}
-				}
-				//			outputLog(self.globalWriteBlockList[i].addr + ' write completed with quality ' + self.globalWriteBlockList[i].writeQuality, 1, self.connectionID);
-				if (!isQualityOK(self.globalWriteBlockList[i].writeQuality)) { anyBadQualities = true; }
-			}
-			if (self.resetPending) {
-				outputLog('Calling reset from writeResponse as there is one pending', 0, self.connectionID);
-				self.resetNow();
-			}
-			if (self.isoConnectionState === 0) {
-				self.connectNow(self.connectionParams, false);
-			}
-			outputLog('We are calling back our writeDoneCallback.', 1, self.connectionID);
-			if (typeof (self.writeDoneCallback) === 'function') {
-				self.writeDoneCallback(anyBadQualities);
-			}
-		}
-	}
-	readResponse(data, foundSeqNum) {
-		var self = this, i;
-		var anyBadQualities;
-		var dataPointer = 21; // For non-routed packets we start at byte 21 of the packet.  If we do routing it will be more than this.
-		var dataObject = {};
-
-		//	if (self.readPacketArray.timeod (i forget what was going on here)
-		//	if (typeof(data) === "undefined") {
-		//		outputLog("Undefined " + foundSeqNum);
-		//	} else {
-		//		outputLog("Defined " + foundSeqNum);
-		//	}
-		outputLog("ReadResponse called", 1, self.connectionID);
-
-		if (!self.readPacketArray[foundSeqNum].sent) {
-			outputLog('WARNING: Received a read response packet that was not marked as sent', 0, self.connectionID);
-			//TODO - fix the network unreachable error that made us do this
-			return null;
-		}
-
-		if (self.readPacketArray[foundSeqNum].rcvd) {
-			outputLog('WARNING: Received a read response packet that was already marked as received', 0, self.connectionID);
-			return null;
-		}
-
-		for (var itemCount = 0; itemCount < self.readPacketArray[foundSeqNum].itemList.length; itemCount++) {
-			dataPointer = processS7Packet(data, self.readPacketArray[foundSeqNum].itemList[itemCount], dataPointer, self.connectionID);
-			if (!dataPointer) {
-				outputLog('Received a ZERO RESPONSE Processing Read Packet due to unrecoverable packet error', 0, self.connectionID);
-				// We rely on this for our timeout.
-			}
-		}
-
-		// Make a note of the time it took the PLC to process the request.
-		self.readPacketArray[foundSeqNum].reqTime = process.hrtime(self.readPacketArray[foundSeqNum].reqTime);
-		outputLog('Time is ' + self.readPacketArray[foundSeqNum].reqTime[0] + ' seconds and ' + Math.round(self.readPacketArray[foundSeqNum].reqTime[1] * 10 / 1e6) / 10 + ' ms.', 1, self.connectionID);
-
-		// Do the bookkeeping for packet and timeout.
-		if (!self.readPacketArray[foundSeqNum].rcvd) {
-			self.readPacketArray[foundSeqNum].rcvd = true;
-			self.parallelJobsNow--;
-		}
-		clearTimeout(self.readPacketArray[foundSeqNum].timeout);
-
-		if (self.readPacketArray.every(doneSending)) { // if sendReadPacket returns true we're all done.
-			// Mark our packets unread for next time.
-			for (i = 0; i < self.readPacketArray.length; i++) {
-				self.readPacketArray[i].sent = false;
-				self.readPacketArray[i].rcvd = false;
-			}
-
-			anyBadQualities = false;
-
-			// Loop through the global block list...
-			for (i = 0; i < self.globalReadBlockList.length; i++) {
-				var lengthOffset = 0;
-				// For each block, we loop through all the requests.  Remember, for all but large arrays, there will only be one.
-				for (var j = 0; j < self.globalReadBlockList[i].requestReference.length; j++) {
-					// Now that our request is complete, we reassemble the BLOCK byte buffer as a copy of each and every request byte buffer.
-					self.globalReadBlockList[i].requestReference[j].byteBuffer.copy(self.globalReadBlockList[i].byteBuffer, lengthOffset, 0, self.globalReadBlockList[i].requestReference[j].byteLength);
-					self.globalReadBlockList[i].requestReference[j].qualityBuffer.copy(self.globalReadBlockList[i].qualityBuffer, lengthOffset, 0, self.globalReadBlockList[i].requestReference[j].byteLength);
-					lengthOffset += self.globalReadBlockList[i].requestReference[j].byteLength;
-				}
-				// For each ITEM reference pointed to by the block, we process the item.
-				for (var k = 0; k < self.globalReadBlockList[i].itemReference.length; k++) {
-					processS7ReadItem(self.globalReadBlockList[i].itemReference[k]);
-					outputLog('Address ' + self.globalReadBlockList[i].itemReference[k].addr + ' has value ' + self.globalReadBlockList[i].itemReference[k].value + ' and quality ' + self.globalReadBlockList[i].itemReference[k].quality, 1, self.connectionID);
-					if (!isQualityOK(self.globalReadBlockList[i].itemReference[k].quality)) {
-						anyBadQualities = true;
-						dataObject[self.globalReadBlockList[i].itemReference[k].useraddr] = self.globalReadBlockList[i].itemReference[k].quality;
-					} else {
-						dataObject[self.globalReadBlockList[i].itemReference[k].useraddr] = self.globalReadBlockList[i].itemReference[k].value;
-					}
-				}
-			}
-
-			// Not as of Feb 2019		if (self.resetPending) {
-			// Not as of Feb 2019			self.resetNow();
-			// Not as of Feb 2019		}
-			if (!self.writeInQueue) {
-				if (self.resetPending) {
-					outputLog('Calling reset from readResponse as there is one pending', 0, self.connectionID);
-					self.resetNow();
-				}
-				if (self.isoConnectionState === 0) {
-					self.connectNow(self.connectionParams, false);
-				}
-			} else {
-				outputLog('Write In Queue.  ICS ' + self.isoConnectionState + ' resetPending ' + self.resetPending, 1, self.connectionID);
-			}
-
-			// Inform our user that we are done and that the values are ready for pickup.
-			outputLog("We are calling back our readDoneCallback.", 1, self.connectionID);
-			if (typeof (self.readDoneCallback) === 'function') {
-				self.readDoneCallback(anyBadQualities, dataObject);
-			}
-
-			if (!self.isReading() && self.writeInQueue) {
-				outputLog("SendWritePacket called because write was queued.", 0, self.connectionID);
-				self.sendWritePacket();
-			}
-		} else {
-			self.sendReadPacket();
-		}
-	}
-	onClientDisconnect() {
-		var self = this;
-		outputLog('ISO-on-TCP connection DISCONNECTED.', 0, self.connectionID);
-
-		// We issue the callback here for Trela/Honcho - in some cases TCP connects, and ISO-on-TCP doesn't.
-		// If this is the case we need to issue the Connect CB in order to keep trying.
+		outputLog('Received PDU Response - Proceeding with PDU ' + self.maxPDU + ' and ' + self.maxParallel + ' max parallel connections.', 0, self.connectionID);
+		self.isoclient.on('data', function() {
+			self.onResponse.apply(self, arguments);
+		});  // We need to make sure we don't add this event every time if we call it on data.
+		self.isoclient.on('error', function() {
+			self.readWriteError.apply(self, arguments);
+		});  // Might want to remove the self.connecterror listener
+		//self.isoclient.removeAllListeners('error');
 		if ((!self.connectCBIssued) && (typeof (self.connectCallback) === "function")) {
 			self.connectCBIssued = true;
-			self.connectCallback("Error - TCP connected, ISO didn't");
+			self.connectCallback();
 		}
-
-		// We used to call self.connectionCleanup() - in other words we would give up.
-		// However - realize that this event is called when the OTHER END of the connection sends a FIN packet.
-		// Certain situations (download user program to mem card on S7-400, pop memory card out of S7-300, both with NetLink) cause this to happen.
-		// So now, let's try a "connetionReset".  This way, we are guaranteed to return values (or bad) and reset at the proper time.
-		// self.connectionCleanup();
-		self.connectionReset();
-	}
-	onClientClose() {
-		var self = this;
-		// clean up the connection now the socket has closed
-		// We used to call self.connectionCleanup() here, but it caused problems.
-		// However - realize that this event is also called when the OTHER END of the connection sends a FIN packet.
-		// Certain situations (download user program to mem card on S7-400, pop memory card out of S7-300, both with NetLink) cause this to happen.
-		// So now, let's try a "connetionReset".  This way, we are guaranteed to return values (even if bad) and reset at the proper time.
-		// Without this, client applications had to be prepared for a read/write not returning.
-		self.connectionReset();
-
-		// initiate the callback stored by dropConnection
-		if (self.dropConnectionCallback) {
-			self.dropConnectionCallback();
-			// prevent any possiblity of the callback being called twice
-			self.dropConnectionCallback = null;
-			// and cancel the timeout
-			clearTimeout(self.dropConnectionTimer);
-		}
-	}
-	connectionReset() {
-		var self = this;
-		self.isoConnectionState = 0;
-		self.resetPending = true;
-		outputLog('ConnectionReset has been called to set the reset as pending', 0, self.connectionID);
-		if (!self.isReading() && !self.isWriting() && !self.writeInQueue && typeof (self.resetTimeout) === 'undefined') { // We can no longer logically ignore writes here
-			self.resetTimeout = setTimeout(function () {
-				outputLog('Timed reset has happened. Ideally this would never be called as reset should be completed when done r/w.', 0, self.connectionID);
-				self.resetNow.apply(self, arguments);
-			}, 3500); // Increased to 3500 to prevent problems with packet timeouts
-		}
-		// We wait until read() is called again to re-connect.
-	}
-	resetNow() {
-		var self = this;
-		self.isoConnectionState = 0;
+	}else{
+		outputLog('INVALID Telegram ', 0, self.connectionID);
+		outputLog('Byte 0 From Header is ' + theData[0] + ' it has to be 0x03, Byte 5 From Header is  ' + theData[5] + ' and it has to be 0x0F ', 0, self.connectionID);
+		outputLog('INVALID PDU RESPONSE or CONNECTION REFUSED - DISCONNECTING', 0, self.connectionID);
+		outputLog('TPKT Length From Header is ' + theData.readInt16BE(2) + ' and RCV buffer length is ' + theData.length + ' and COTP length is ' + theData.readUInt8(4) + ' and data[6] is ' + theData[6], 0, self.connectionID);
+		outputLog(theData);
 		self.isoclient.end();
-		outputLog('ResetNOW is happening', 0, self.connectionID);
-		self.resetPending = false;
-		// In some cases, we can have a timeout scheduled for a reset, but we don't want to call it again in that case.
-		// We only want to call a reset just as we are returning values.  Otherwise, we will get asked to read // more values and we will "break our promise" to always return something when asked.
-		if (typeof (self.resetTimeout) !== 'undefined') {
-			clearTimeout(self.resetTimeout);
-			self.resetTimeout = undefined;
-			outputLog('Clearing an earlier scheduled reset', 0, self.connectionID);
-		}
-	}
-	connectionCleanup() {
-		var self = this;
-		self.isoConnectionState = 0;
-		outputLog('Connection cleanup is happening', 0, self.connectionID);
-		if (typeof (self.isoclient) !== "undefined") {
-			// destroy the socket connection
-			self.isoclient.destroy();
-			self.isoclient.removeAllListeners('data');
-			self.isoclient.removeAllListeners('error');
-			self.isoclient.removeAllListeners('connect');
-			self.isoclient.removeAllListeners('end');
-			self.isoclient.removeAllListeners('close');
-			self.isoclient.on('error', function () {
-				outputLog('TCP socket error following connection cleanup');
-			});
-		}
-		clearTimeout(self.connectTimeout);
-		clearTimeout(self.PDUTimeout);
-		self.clearReadPacketTimeouts(); // Note this clears timeouts.
-		self.clearWritePacketTimeouts(); // Note this clears timeouts.
+		clearTimeout(self.reconnectTimer);
+		self.reconnectTimer = setTimeout(function() {
+			self.connectNow.apply(self, arguments);
+		}, 2000, self.connectionParams);
+		return null;
 	}
 }
 
 
+NodeS7.prototype.writeItems = function(arg, value, cb) {
+	var self = this, i;
+	outputLog("Preparing to WRITE " + arg + " to value " + value, 0, self.connectionID);
+	if (self.isWriting() || self.writeInQueue) {
+		outputLog("You must wait until all previous writes have finished before scheduling another. ", 0, self.connectionID);
+		return 1;  // Watch for this in your code - 1 means it hasn't actually entered into the queue.
+	}
+
+	if (typeof cb === "function") {
+		self.writeDoneCallback = cb;
+	} else {
+		self.writeDoneCallback = doNothing;
+	}
+
+	self.instantWriteBlockList = []; // Initialize the array.
+
+	if (typeof arg === "string") {
+		self.instantWriteBlockList.push(stringToS7Addr(self.translationCB(arg), arg, self.connectionParams));
+		if (typeof (self.instantWriteBlockList[self.instantWriteBlockList.length - 1]) !== "undefined") {
+			self.instantWriteBlockList[self.instantWriteBlockList.length - 1].writeValue = value;
+		}
+	} else if (Array.isArray(arg) && Array.isArray(value) && (arg.length == value.length)) {
+		for (i = 0; i < arg.length; i++) {
+			if (typeof arg[i] === "string") {
+				self.instantWriteBlockList.push(stringToS7Addr(self.translationCB(arg[i]), arg[i], self.connectionParams));
+				if (typeof (self.instantWriteBlockList[self.instantWriteBlockList.length - 1]) !== "undefined") {
+					self.instantWriteBlockList[self.instantWriteBlockList.length - 1].writeValue = value[i];
+				}
+			}
+		}
+	}
+
+	// Validity check.
+	for (i = self.instantWriteBlockList.length - 1; i >= 0; i--) {
+		if (self.instantWriteBlockList[i] === undefined) {
+			self.instantWriteBlockList.splice(i, 1);
+			outputLog("Dropping an undefined write item.");
+		}
+	}
+	self.prepareWritePacket();
+	if (!self.isReading()) {
+		self.sendWritePacket();
+	} else {
+		if (self.writeInQueue) {
+			outputLog("Write was already in queue - should be prevented above",1,self.connectionID);
+		}
+		self.writeInQueue = true;
+		outputLog("Adding write to queue");
+	}
+	return 0;
+}
 
 
+NodeS7.prototype.findItem = function(useraddr) {
+	var self = this, i;
+	var commstate = { value: self.isoConnectionState !== 4, quality: 'OK' };
+	if (useraddr === '_COMMERR') { return commstate; }
+	for (i = 0; i < self.polledReadBlockList.length; i++) {
+		if (self.polledReadBlockList[i].useraddr === useraddr) { return self.polledReadBlockList[i]; }
+	}
+	return undefined;
+}
+
+NodeS7.prototype.addItems = function(arg) {
+	var self = this;
+	self.addRemoveArray.push({ arg: arg, action: 'add' });
+}
+
+NodeS7.prototype.addItemsNow = function(arg) {
+	var self = this, i;
+	outputLog("Adding " + arg, 0, self.connectionID);
+	if (typeof (arg) === "string" && arg !== "_COMMERR") {
+		self.polledReadBlockList.push(stringToS7Addr(self.translationCB(arg), arg, self.connectionParams));
+	} else if (Array.isArray(arg)) {
+		for (i = 0; i < arg.length; i++) {
+			if (typeof (arg[i]) === "string" && arg[i] !== "_COMMERR") {
+				self.polledReadBlockList.push(stringToS7Addr(self.translationCB(arg[i]), arg[i], self.connectionParams));
+			}
+		}
+	}
+
+	// Validity check.
+	for (i = self.polledReadBlockList.length - 1; i >= 0; i--) {
+		if (self.polledReadBlockList[i] === undefined) {
+			self.polledReadBlockList.splice(i, 1);
+			outputLog("Dropping an undefined request item.", 0, self.connectionID);
+		}
+	}
+	//	self.prepareReadPacket();
+	self.readPacketValid = false;
+}
+
+NodeS7.prototype.removeItems = function(arg) {
+	var self = this;
+	self.addRemoveArray.push({ arg: arg, action: 'remove' });
+}
+
+NodeS7.prototype.removeItemsNow = function(arg) {
+	var self = this, i;
+	if (typeof arg === "undefined") {
+		self.polledReadBlockList = [];
+	} else if (typeof arg === "string") {
+		for (i = 0; i < self.polledReadBlockList.length; i++) {
+			outputLog('TCBA ' + self.translationCB(arg));
+			if (self.polledReadBlockList[i].addr === self.translationCB(arg)) {
+				outputLog('Splicing');
+				self.polledReadBlockList.splice(i, 1);
+			}
+		}
+	} else if (Array.isArray(arg)) {
+		for (i = 0; i < self.polledReadBlockList.length; i++) {
+			for (var j = 0; j < arg.length; j++) {
+				if (self.polledReadBlockList[i].addr === self.translationCB(arg[j])) {
+					self.polledReadBlockList.splice(i, 1);
+				}
+			}
+		}
+	}
+	self.readPacketValid = false;
+	//	self.prepareReadPacket();
+}
+
+NodeS7.prototype.readAllItems = function(arg) {
+	var self = this;
+
+	outputLog("Reading All Items (readAllItems was called)", 1, self.connectionID);
+
+	if (typeof arg === "function") {
+		self.readDoneCallback = arg;
+	} else {
+		self.readDoneCallback = doNothing;
+	}
+
+	if (self.isoConnectionState !== 4) {
+		outputLog("Unable to read when not connected. Return bad values.", 0, self.connectionID);
+	} // For better behaviour when auto-reconnecting - don't return now
+
+	// Check if ALL are done...  You might think we could look at parallel jobs, and for the most part we can, but if one just finished and we end up here before starting another, it's bad.
+	if (self.isWaiting()) {
+		outputLog("Waiting to read for all R/W operations to complete.  Will re-trigger readAllItems in 100ms.", 0, self.connectionID);
+		clearTimeout(self.rereadTimer);
+		self.rereadTimer = setTimeout(function() {
+			self.rereadTimer = undefined; //already fired, can safely discard
+			self.readAllItems.apply(self, arguments);
+		}, 100, arg);
+		return;
+	}
+
+	// Now we check the array of adding and removing things.  Only now is it really safe to do this.
+	self.addRemoveArray.forEach(function(element) {
+		outputLog('Adding or Removing ' + util.format(element), 1, self.connectionID);
+		if (element.action === 'remove') {
+			self.removeItemsNow(element.arg);
+		}
+		if (element.action === 'add') {
+			self.addItemsNow(element.arg);
+		}
+	});
+
+	self.addRemoveArray = []; // Clear for next time.
+
+	if (!self.readPacketValid) { self.prepareReadPacket(); }
+
+	// ideally...  incrementSequenceNumbers();
+
+	outputLog("Calling SRP from RAI", 1, self.connectionID);
+	self.sendReadPacket(); // Note this sends the first few read packets depending on parallel connection restrictions.
+}
+
+NodeS7.prototype.isWaiting = function() {
+	var self = this;
+	return (self.isReading() || self.isWriting());
+}
+
+NodeS7.prototype.isReading = function() {
+	var self = this, i;
+	// Walk through the array and if any packets are marked as sent, it means we haven't received our final confirmation.
+	for (i = 0; i < self.readPacketArray.length; i++) {
+		if (self.readPacketArray[i].sent === true) { return true }
+	}
+	return false;
+}
+
+NodeS7.prototype.isWriting = function() {
+	var self = this, i;
+	// Walk through the array and if any packets are marked as sent, it means we haven't received our final confirmation.
+	for (i = 0; i < self.writePacketArray.length; i++) {
+		if (self.writePacketArray[i].sent === true) { return true }
+	}
+	return false;
+}
 
 
+NodeS7.prototype.clearReadPacketTimeouts = function() {
+	var self = this, i;
+	outputLog('Clearing read PacketTimeouts', 1, self.connectionID);
+	// Before we initialize the self.readPacketArray, we need to loop through all of them and clear timeouts.
+	for (i = 0; i < self.readPacketArray.length; i++) {
+		clearTimeout(self.readPacketArray[i].timeout);
+		self.readPacketArray[i].sent = false;
+		self.readPacketArray[i].rcvd = false;
+	}
+}
+
+NodeS7.prototype.clearWritePacketTimeouts = function() {
+	var self = this, i;
+	outputLog('Clearing write PacketTimeouts', 1, self.connectionID);
+	// Before we initialize the self.readPacketArray, we need to loop through all of them and clear timeouts.
+	for (i = 0; i < self.writePacketArray.length; i++) {
+		clearTimeout(self.writePacketArray[i].timeout);
+		self.writePacketArray[i].sent = false;
+		self.writePacketArray[i].rcvd = false;
+	}
+}
+
+NodeS7.prototype.prepareWritePacket = function() {
+	var self = this, i;
+	var itemList = self.instantWriteBlockList;
+	var requestList = [];			// The request list consists of the block list, split into chunks readable by PDU.
+	var requestNumber = 0;
+
+	// Sort the items using the sort function, by type and offset.
+	itemList.sort(itemListSorter);
+
+	// Just exit if there are no items.
+	if (itemList.length === 0) {
+		return undefined;
+	}
+
+	// Reinitialize the WriteBlockList
+	self.globalWriteBlockList = [];
+
+	// At this time we do not do write optimizations.
+	// The reason for this is it is would cause numerous issues depending how the code was written in the PLC.
+	// If we write M0.1 and M0.2 then to optimize we would have to write MB0, which also writes 0.0, 0.3, 0.4...
+	//
+	// I suppose when working with integers, if we write MW0 and MW2, we could write these as one block.
+	// But if you really, really want the program to do that, write an array yourself.
+	self.globalWriteBlockList[0] = itemList[0];
+	self.globalWriteBlockList[0].itemReference = [];
+	self.globalWriteBlockList[0].itemReference.push(itemList[0]);
+
+	var thisBlock = 0;
+	itemList[0].block = thisBlock;
+	var maxByteRequest = 4 * Math.floor((self.maxPDU - 18 - 12) / 4);  // Absolutely must not break a real array into two requests.  Maybe we can extend by two bytes when not DINT/REAL/INT.  But modified now for LREAL.
+	maxByteRequest = 8 * Math.floor((self.maxPDU - 18 - 12) / 8);
+	//	outputLog("Max Write Length is " + maxByteRequest);
+
+	// Just push the items into blocks and figure out the write buffers
+	for (i = 0; i < itemList.length; i++) {
+		self.globalWriteBlockList[i] = itemList[i]; // Remember - by reference.
+		self.globalWriteBlockList[i].isOptimized = false;
+		self.globalWriteBlockList[i].itemReference = [];
+		self.globalWriteBlockList[i].itemReference.push(itemList[i]);
+		bufferizeS7Item(itemList[i]);
+	}
+
+	var thisRequest = 0;
+
+	// Split the blocks into requests, if they're too large.
+	for (i = 0; i < self.globalWriteBlockList.length; i++) {
+		var startByte = self.globalWriteBlockList[i].offset;
+		var remainingLength = self.globalWriteBlockList[i].byteLength;
+		var lengthOffset = 0;
+
+		// Always create a request for a self.globalReadBlockList.
+		requestList[thisRequest] = self.globalWriteBlockList[i].clone();
+
+		// How many parts?
+		self.globalWriteBlockList[i].parts = Math.ceil(self.globalWriteBlockList[i].byteLength / maxByteRequest);
+		//		outputLog("self.globalWriteBlockList " + i + " parts is " + self.globalWriteBlockList[i].parts + " offset is " + self.globalWriteBlockList[i].offset + " MBR is " + maxByteRequest);
+
+		self.globalWriteBlockList[i].requestReference = [];
+
+		// If we're optimized...
+		for (var j = 0; j < self.globalWriteBlockList[i].parts; j++) {
+			requestList[thisRequest] = self.globalWriteBlockList[i].clone();
+			self.globalWriteBlockList[i].requestReference.push(requestList[thisRequest]);
+			requestList[thisRequest].offset = startByte;
+			requestList[thisRequest].byteLength = Math.min(maxByteRequest, remainingLength);
+			requestList[thisRequest].byteLengthWithFill = requestList[thisRequest].byteLength;
+			if (requestList[thisRequest].byteLengthWithFill % 2) { requestList[thisRequest].byteLengthWithFill += 1; }
+
+			// max
+
+			requestList[thisRequest].writeBuffer = self.globalWriteBlockList[i].writeBuffer.slice(lengthOffset, lengthOffset + requestList[thisRequest].byteLengthWithFill);
+			requestList[thisRequest].writeQualityBuffer = self.globalWriteBlockList[i].writeQualityBuffer.slice(lengthOffset, lengthOffset + requestList[thisRequest].byteLengthWithFill);
+			lengthOffset += self.globalWriteBlockList[i].requestReference[j].byteLength;
+
+			if (self.globalWriteBlockList[i].parts > 1) {
+				requestList[thisRequest].datatype = 'BYTE';
+				requestList[thisRequest].dtypelen = 1;
+				requestList[thisRequest].arrayLength = requestList[thisRequest].byteLength;//self.globalReadBlockList[thisBlock].byteLength;		(This line shouldn't be needed anymore - shouldn't matter)
+			}
+			remainingLength -= maxByteRequest;
+			thisRequest++;
+			startByte += maxByteRequest;
+		}
+	}
+
+	self.clearWritePacketTimeouts();
+	self.writePacketArray = [];
+
+	//	outputLog("GWBL is " + self.globalWriteBlockList.length);
 
 
+	// Before we initialize the self.writePacketArray, we need to loop through all of them and clear timeouts.
+
+	// The packetizer...
+	while (requestNumber < requestList.length) {
+		// Set up the read packet
+		// Yes this is the same master sequence number shared with the read queue
+
+		var numItems = 0;
+
+		// Maybe this shouldn't really be here?
+		self.writeReqHeader.copy(self.writeReq, 0);
+
+		// Packet's length
+		var packetWriteLength = 10 + 4;  // 10 byte header and 4 byte param header
+
+		self.writePacketArray.push(new S7Packet());
+		var thisPacketNumber = self.writePacketArray.length - 1;
+		self.writePacketArray[thisPacketNumber].seqNum = self.getNextSeqNum();
+		//		outputLog("Write Sequence Number is " + self.writePacketArray[thisPacketNumber].seqNum);
+
+		self.writePacketArray[thisPacketNumber].itemList = [];  // Initialize as array.
+
+		for (i = requestNumber; i < requestList.length; i++) {
+			//outputLog("Number is " + (requestList[i].byteLengthWithFill + 4 + packetReplyLength));
+			if (requestList[i].byteLengthWithFill + 12 + 4 + packetWriteLength > self.maxPDU) { // 12 byte header for each item and 4 bytes for the data header
+				if (numItems === 0) {
+					outputLog("breaking when we shouldn't, byte length with fill is  " + requestList[i].byteLengthWithFill + " max byte request " + maxByteRequest, 0, self.connectionID);
+					throw new Error("Somehow write request didn't split properly - exiting.  Report this as a bug.");
+				}
+				break;  // We can't fit this packet in here.
+			}
+			requestNumber++;
+			numItems++;
+			packetWriteLength += (requestList[i].byteLengthWithFill + 12 + 4); // Don't forget each request has a 12 byte header as well.
+			//outputLog('I is ' + i + ' Addr Type is ' + requestList[i].addrtype + ' and type is ' + requestList[i].datatype + ' and DBNO is ' + requestList[i].dbNumber + ' and offset is ' + requestList[i].offset + ' bit ' + requestList[i].bitOffset + ' len ' + requestList[i].arrayLength);
+			//S7AddrToBuffer(requestList[i]).copy(self.writeReq, 19 + numItems * 12);  // i or numItems?  used to be i.
+			//itemBuffer = bufferizeS7Packet(requestList[i]);
+			//itemBuffer.copy(dataBuffer, dataBufferPointer);
+			//dataBufferPointer += itemBuffer.length;
+			self.writePacketArray[thisPacketNumber].itemList.push(requestList[i]);
+		}
+		//		dataBuffer.copy(self.writeReq, 19 + (numItems + 1) * 12, 0, dataBufferPointer - 1);
+	}
+}
 
 
+NodeS7.prototype.prepareReadPacket = function() {
+	var self = this, i;
+	// Note that for a PDU size of 240, the MOST bytes we can request depends on the number of items.
+	// To figure this out, allow for a 247 byte packet.  7 TPKT+COTP header doesn't count for PDU, so 240 bytes of "S7 data".
+	// In the response you ALWAYS have a 12 byte S7 header.
+	// Then you have a 2 byte parameter header.
+	// Then you have a 4 byte "item header" PER ITEM.
+	// So you have overhead of 18 bytes for one item, 22 bytes for two items, 26 bytes for 3 and so on.  So for example you can request 240 - 22 = 218 bytes for two items.
+
+	// We can calculate a max byte length for single request as 4*Math.floor((self.maxPDU - 18)/4) - to ensure we don't cross boundaries.
+
+	var itemList = self.polledReadBlockList;				// The items are the actual items requested by the user
+	var requestList = [];						// The request list consists of the block list, split into chunks readable by PDU.
+
+	// Validity check.
+	for (i = itemList.length - 1; i >= 0; i--) {
+		if (itemList[i] === undefined) {
+			itemList.splice(i, 1);
+			outputLog("Dropping an undefined request item.", 0, self.connectionID);
+		}
+	}
+
+	// Sort the items using the sort function, by type and offset.
+	itemList.sort(itemListSorter);
+
+	// Just exit if there are no items.
+	if (itemList.length === 0) {
+		return undefined;
+	}
+
+	self.globalReadBlockList = [];
+
+	// ...because you have to start your optimization somewhere.
+	self.globalReadBlockList[0] = itemList[0];
+	self.globalReadBlockList[0].itemReference = [];
+	self.globalReadBlockList[0].itemReference.push(itemList[0]);
+
+	var thisBlock = 0;
+	itemList[0].block = thisBlock;
+	var maxByteRequest = 4 * Math.floor((self.maxPDU - 18) / 4);  // Absolutely must not break a real array into two requests.  Maybe we can extend by two bytes when not DINT/REAL/INT.
+
+	// Optimize the items into blocks
+	for (i = 1; i < itemList.length; i++) {
+		// Skip T, C, P types
+		if ((itemList[i].areaS7Code !== self.globalReadBlockList[thisBlock].areaS7Code) ||   	// Can't optimize between areas
+			(itemList[i].dbNumber !== self.globalReadBlockList[thisBlock].dbNumber) ||			// Can't optimize across DBs
+			(!self.isOptimizableArea(itemList[i].areaS7Code)) || 					// Can't optimize T,C (I don't think) and definitely not P.
+			((itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength) > maxByteRequest) ||      	// If this request puts us over our max byte length, create a new block for consistency reasons.
+			(itemList[i].offset - (self.globalReadBlockList[thisBlock].offset + self.globalReadBlockList[thisBlock].byteLength) > self.maxGap)) {		// If our gap is large, create a new block.
+
+			outputLog("Skipping optimization of item " + itemList[i].addr, 0, self.connectionID);
+
+			// At this point we give up and create a new block.
+			thisBlock = thisBlock + 1;
+			self.globalReadBlockList[thisBlock] = itemList[i]; // By reference.
+			//				itemList[i].block = thisBlock; // Don't need to do this.
+			self.globalReadBlockList[thisBlock].isOptimized = false;
+			self.globalReadBlockList[thisBlock].itemReference = [];
+			self.globalReadBlockList[thisBlock].itemReference.push(itemList[i]);
+		} else {
+			outputLog("Attempting optimization of item " + itemList[i].addr + " with " + self.globalReadBlockList[thisBlock].addr, 0, self.connectionID);
+			// This next line checks the maximum.
+			// Think of this situation - we have a large request of 40 bytes starting at byte 10.
+			//	Then someone else wants one byte starting at byte 12.  The block length doesn't change.
+			//
+			// But if we had 40 bytes starting at byte 10 (which gives us byte 10-49) and we want byte 50, our byte length is 50-10 + 1 = 41.
+			self.globalReadBlockList[thisBlock].byteLength = Math.max(self.globalReadBlockList[thisBlock].byteLength, itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength);
+
+			// Point the buffers (byte and quality) to a sliced version of the optimized block.  This is by reference (same area of memory)
+			itemList[i].byteBuffer = self.globalReadBlockList[thisBlock].byteBuffer.slice(itemList[i].offset - self.globalReadBlockList[thisBlock].offset, itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength);
+			itemList[i].qualityBuffer = self.globalReadBlockList[thisBlock].qualityBuffer.slice(itemList[i].offset - self.globalReadBlockList[thisBlock].offset, itemList[i].offset - self.globalReadBlockList[thisBlock].offset + itemList[i].byteLength);
+
+			// For now, change the request type here, and fill in some other things.
+
+			// I am not sure we want to do these next two steps.
+			// It seems like things get screwed up when we do this.
+			// Since self.globalReadBlockList[thisBlock] exists already at this point, and our buffer is already set, let's not do this now.
+			// self.globalReadBlockList[thisBlock].datatype = 'BYTE';
+			// self.globalReadBlockList[thisBlock].dtypelen = 1;
+			self.globalReadBlockList[thisBlock].isOptimized = true;
+			self.globalReadBlockList[thisBlock].itemReference.push(itemList[i]);
+		}
+	}
+
+	var thisRequest = 0;
+
+	//	outputLog("Preparing the read packet...");
+
+	// Split the blocks into requests, if they're too large.
+	for (i = 0; i < self.globalReadBlockList.length; i++) {
+		// Always create a request for a self.globalReadBlockList.
+		requestList[thisRequest] = self.globalReadBlockList[i].clone();
+
+		// How many parts?
+		self.globalReadBlockList[i].parts = Math.ceil(self.globalReadBlockList[i].byteLength / maxByteRequest);
+		outputLog("self.globalReadBlockList " + i + " parts is " + self.globalReadBlockList[i].parts + " offset is " + self.globalReadBlockList[i].offset + " MBR is " + maxByteRequest, 1, self.connectionID);
+		var startByte = self.globalReadBlockList[i].offset;
+		var remainingLength = self.globalReadBlockList[i].byteLength;
+
+		self.globalReadBlockList[i].requestReference = [];
+
+		// If we're optimized...
+		for (var j = 0; j < self.globalReadBlockList[i].parts; j++) {
+			requestList[thisRequest] = self.globalReadBlockList[i].clone();
+			self.globalReadBlockList[i].requestReference.push(requestList[thisRequest]);
+			//outputLog(self.globalReadBlockList[i]);
+			//outputLog(self.globalReadBlockList.slice(i,i+1));
+			requestList[thisRequest].offset = startByte;
+			requestList[thisRequest].byteLength = Math.min(maxByteRequest, remainingLength);
+			requestList[thisRequest].byteLengthWithFill = requestList[thisRequest].byteLength;
+			if (requestList[thisRequest].byteLengthWithFill % 2) { requestList[thisRequest].byteLengthWithFill += 1; }
+			// Just for now...
+			if (self.globalReadBlockList[i].parts > 1) {
+				requestList[thisRequest].datatype = 'BYTE';
+				requestList[thisRequest].dtypelen = 1;
+				requestList[thisRequest].arrayLength = requestList[thisRequest].byteLength;//self.globalReadBlockList[thisBlock].byteLength;
+			}
+			remainingLength -= maxByteRequest;
+			thisRequest++;
+			startByte += maxByteRequest;
+		}
+	}
+
+	//requestList[5].offset = 243;
+	//	requestList = self.globalReadBlockList;
+
+	// The packetizer...
+	var requestNumber = 0;
+
+	self.clearReadPacketTimeouts();
+	self.readPacketArray = [];
+
+	while (requestNumber < requestList.length) {
+
+		var numItems = 0;
+		self.readReqHeader.copy(self.readReq, 0);
+
+		// Packet's expected reply length
+		var packetReplyLength = 12 + 2;  //
+		var packetRequestLength = 12; //s7 header and parameter header
+
+		self.readPacketArray.push(new S7Packet());
+		var thisPacketNumber = self.readPacketArray.length - 1;
+		// don't set a fixed sequence number here. Instead, set it just before sending to avoid conflict with write sequence numbers
+		self.readPacketArray[thisPacketNumber].seqNum = 0;
+		self.readPacketArray[thisPacketNumber].itemList = [];  // Initialize as array.
+
+		for (i = requestNumber; i < requestList.length; i++) {
+			//outputLog("Number is " + (requestList[i].byteLengthWithFill + 4 + packetReplyLength));
+			if (requestList[i].byteLengthWithFill + 4 + packetReplyLength > self.maxPDU || packetRequestLength + 12 > self.maxPDU) {
+				outputLog("Splitting request: " + numItems + " items, requestLength would be " + (packetRequestLength + 12) + ", replyLength would be " + (requestList[i].byteLengthWithFill + 4 + packetReplyLength) + ", PDU is " + self.maxPDU, 1, self.connectionID);
+				if (numItems === 0) {
+					outputLog("breaking when we shouldn't, rlibl " + requestList[i].byteLengthWithFill + " MBR " + maxByteRequest, 0, self.connectionID);
+					throw new Error("Somehow write request didn't split properly - exiting.  Report this as a bug.");
+				}
+				break;  // We can't fit this packet in here.
+			}
+			requestNumber++;
+			numItems++;
+			packetReplyLength += (requestList[i].byteLengthWithFill + 4);
+			packetRequestLength += 12;
+			//outputLog('I is ' + i + ' Addr Type is ' + requestList[i].addrtype + ' and type is ' + requestList[i].datatype + ' and DBNO is ' + requestList[i].dbNumber + ' and offset is ' + requestList[i].offset + ' bit ' + requestList[i].bitOffset + ' len ' + requestList[i].arrayLength);
+			// skip this for now S7AddrToBuffer(requestList[i]).copy(self.readReq, 19 + numItems * 12);  // i or numItems?
+			self.readPacketArray[thisPacketNumber].itemList.push(requestList[i]);
+		}
+	}
+	self.readPacketValid = true;
+}
+
+NodeS7.prototype.sendReadPacket = function() {
+	var self = this, i, j, flagReconnect = false;
+
+	outputLog("SendReadPacket called", 1, self.connectionID);
+
+	if (!self.readPacketArray.length && (typeof(self.readDoneCallback) === "function")) {
+		// Call back the callback if we are being asked for zero tags - for consistency
+		self.readDoneCallback(false, {}); // Data is second argument and shouldn't be undefined
+	}
+
+	for (i = 0; i < self.readPacketArray.length; i++) {
+		if (self.readPacketArray[i].sent) { continue; }
+		if (self.parallelJobsNow >= self.maxParallel) { continue; }
+
+		// Set sequence number of packet here
+		self.readPacketArray[i].seqNum = self.getNextSeqNum();
+
+		// From here down is SENDING the packet
+		self.readPacketArray[i].reqTime = process.hrtime();
+		self.readReq.writeUInt8(self.readPacketArray[i].itemList.length, 18);
+		self.readReq.writeUInt16BE(19 + self.readPacketArray[i].itemList.length * 12, 2); // buffer length
+		self.readReq.writeUInt16BE(self.readPacketArray[i].seqNum, 11);
+		self.readReq.writeUInt16BE(self.readPacketArray[i].itemList.length * 12 + 2, 13); // Parameter length - 14 for one read, 28 for 2.
+
+		for (j = 0; j < self.readPacketArray[i].itemList.length; j++) {
+			S7AddrToBuffer(self.readPacketArray[i].itemList[j], false).copy(self.readReq, 19 + j * 12);
+		}
+
+		if (self.isoConnectionState == 4) {
+			outputLog('Sending Read Packet With Sequence Number ' + self.readPacketArray[i].seqNum, 1, self.connectionID);
+
+			self.readPacketArray[i].timeout = setTimeout(function() {
+				self.packetTimeout.apply(self, arguments);
+			}, self.globalTimeout, "read", self.readPacketArray[i].seqNum);
+			self.isoclient.write(self.readReq.slice(0, 19 + self.readPacketArray[i].itemList.length * 12));  // was 31
+			self.readPacketArray[i].sent = true;
+			self.readPacketArray[i].rcvd = false;
+			self.readPacketArray[i].timeoutError = false;
+			self.parallelJobsNow += 1;
+		} else {
+			//			outputLog('Somehow got into read block without proper self.isoConnectionState of 3.  Disconnect.');
+			//			self.isoclient.end();
+			//			setTimeout(function(){
+			//				self.connectNow.apply(self, arguments);
+			//			}, 2000, self.connectionParams);
+			// self.parallelJobsNow += 1;  // Note that we don't do this here - we want all packets to time out at once when not connected. 
+			self.readPacketArray[i].sent = true;
+			self.readPacketArray[i].rcvd = false;
+			self.readPacketArray[i].timeoutError = true;
+			if (!flagReconnect) {
+				// Prevent duplicates
+				outputLog('Not Sending Read Packet because we are not connected - ISO CS is ' + self.isoConnectionState, 0, self.connectionID);
+			}
+			// This is essentially an instantTimeout.
+			if (self.isoConnectionState === 0) {
+				flagReconnect = true;
+			}
+			outputLog('Requesting PacketTimeout Due to ISO CS NOT 4 - READ SN ' + self.readPacketArray[i].seqNum, 1, self.connectionID);
+			self.readPacketArray[i].timeout = setTimeout(function() {
+				self.packetTimeout.apply(self, arguments);
+			}, 0, "read", self.readPacketArray[i].seqNum);
+		}
+	}
+
+/* NOTE: We no longer do this here.
+Reconnects are done on the response that we will get from the above packets.
+Reason: We could have some packets waiting for timeout from the PLC, and others coming back instantly.
+	if (flagReconnect) {
+		//		console.log("Asking for callback next tick and my ID is " + self.connectionID);
+		clearTimeout(self.reconnectTimer)
+		self.reconnectTimer = setTimeout(function() {
+			//			console.log("Next tick is here and my ID is " + self.connectionID);
+			outputLog("The scheduled reconnect from sendReadPacket is happening now", 1, self.connectionID);
+			self.connectNow(self.connectionParams);  // We used to do this NOW - not NextTick() as we need to mark isoConnectionState as 1 right now.  Otherwise we queue up LOTS of connects and crash.
+		}, 0);
+	}
+*/
+
+}
 
 
+NodeS7.prototype.sendWritePacket = function() {
+	var self = this, i, dataBuffer, itemBuffer, dataBufferPointer, flagReconnect;
+
+	dataBuffer = Buffer.alloc(8192);
+
+	self.writeInQueue = false;
+
+	for (i = 0; i < self.writePacketArray.length; i++) {
+		if (self.writePacketArray[i].sent) { continue; }
+		if (self.parallelJobsNow >= self.maxParallel) { continue; }
+		// From here down is SENDING the packet
+		self.writePacketArray[i].reqTime = process.hrtime();
+		self.writeReq.writeUInt8(self.writePacketArray[i].itemList.length, 18);
+		self.writeReq.writeUInt16BE(self.writePacketArray[i].seqNum, 11);
+
+		dataBufferPointer = 0;
+		for (var j = 0; j < self.writePacketArray[i].itemList.length; j++) {
+			S7AddrToBuffer(self.writePacketArray[i].itemList[j], true).copy(self.writeReq, 19 + j * 12);
+			itemBuffer = getWriteBuffer(self.writePacketArray[i].itemList[j]);
+			itemBuffer.copy(dataBuffer, dataBufferPointer);
+			dataBufferPointer += itemBuffer.length;
+			// NOTE: It seems that when writing, the data that is sent must have a "fill byte" so that data length is even only for all
+			//  but the last request.  The last request must have no padding.  So we add the padding here.
+			if (j < (self.writePacketArray[i].itemList.length - 1)) {
+				if (itemBuffer.length % 2) {
+					dataBufferPointer += 1;
+				}
+			}
+		}
+
+		//		outputLog('DataBufferPointer is ' + dataBufferPointer);
+		self.writeReq.writeUInt16BE(19 + self.writePacketArray[i].itemList.length * 12 + dataBufferPointer, 2); // buffer length
+		self.writeReq.writeUInt16BE(self.writePacketArray[i].itemList.length * 12 + 2, 13); // Parameter length - 14 for one read, 28 for 2.
+		self.writeReq.writeUInt16BE(dataBufferPointer, 15); // Data length - as appropriate.
+
+		dataBuffer.copy(self.writeReq, 19 + self.writePacketArray[i].itemList.length * 12, 0, dataBufferPointer);
+
+		if (self.isoConnectionState === 4) {
+			//			outputLog('writing' + (19+dataBufferPointer+self.writePacketArray[i].itemList.length*12));
+			self.writePacketArray[i].timeout = setTimeout(function() {
+				self.packetTimeout.apply(self, arguments);
+			}, self.globalTimeout, "write", self.writePacketArray[i].seqNum);
+			self.isoclient.write(self.writeReq.slice(0, 19 + dataBufferPointer + self.writePacketArray[i].itemList.length * 12));  // was 31
+			self.writePacketArray[i].sent = true;
+			self.writePacketArray[i].rcvd = false;
+			self.writePacketArray[i].timeoutError = false;
+			self.parallelJobsNow += 1;
+			outputLog('Sending Write Packet With Sequence Number ' + self.writePacketArray[i].seqNum, 1, self.connectionID);
+		} else {
+			//			outputLog('Somehow got into write block without proper isoConnectionState of 4.  Disconnect.');
+			//			connectionReset();
+			//			setTimeout(connectNow, 2000, connectionParams);
+			// This is essentially an instantTimeout.
+			self.writePacketArray[i].sent = true;
+			self.writePacketArray[i].rcvd = false;
+			self.writePacketArray[i].timeoutError = true;
+
+			// Without the scopePlaceholder, this doesn't work.   writePacketArray[i] becomes undefined.
+			// The reason is that the value i is part of a closure and when seen "nextTick" has the same value
+			// it would have just after the FOR loop is done.
+			// (The FOR statement will increment it to beyond the array, then exit after the condition fails)
+			// scopePlaceholder works as the array is de-referenced NOW, not "nextTick".
+//dm			var scopePlaceholder = self.writePacketArray[i].seqNum;
+//dm			process.nextTick(function() {
+//dm				self.packetTimeout("write", scopePlaceholder);
+//dm			});
+
+			self.writePacketArray[i].timeout = setTimeout(function () {
+				self.packetTimeout.apply(self, arguments);
+			}, 0, "write", self.writePacketArray[i].seqNum);
+
+			if (self.isoConnectionState === 0) {
+				flagReconnect = true;
+			}
+		}
+	}
+/* NOTE: We no longer do this here.
+Reconnects are done on the response that we will get from the above packets.
+Reason: We could have some packets waiting for timeout from the PLC, and others coming back instantly.	
+	if (flagReconnect) {
+		//		console.log("Asking for callback next tick and my ID is " + self.connectionID);
+		clearTimeout(self.reconnectTimer);
+		self.reconnectTimer = setTimeout(function() {
+			//			console.log("Next tick is here and my ID is " + self.connectionID);
+			outputLog("The scheduled reconnect from sendWritePacket is happening now", 1, self.connectionID);
+			self.connectNow(self.connectionParams);  // We used to do this NOW - not NextTick() as we need to mark isoConnectionState as 1 right now.  Otherwise we queue up LOTS of connects and crash.
+		}, 0);
+	}*/
+}
+
+NodeS7.prototype.isOptimizableArea = function(area) {
+	var self = this;
+
+	if (self.doNotOptimize) { return false; } // Are we skipping all optimization due to user request?
+	switch (area) {
+		case 0x84: // db
+		case 0x81: // input bytes
+		case 0x82: // output bytes
+		case 0x83: // memory bytes
+			return true;
+		default:
+			return false;
+	}
+}
+
+NodeS7.prototype.onResponse = function(theData) {
+	var self = this;
+	// Packet Validity Check.  Note that this will pass even with a "not available" response received from the server.
+	// For length calculation and verification:
+	// data[4] = COTP header length. Normally 2.  This doesn't include the length byte so add 1.
+	// read(13) is parameter length.  Normally 4.
+	// read(14) is data length.  (Includes item headers)
+	// 12 is length of "S7 header"
+	// Then we need to add 4 for TPKT header.
+
+	// Decrement our parallel jobs now
+
+	// NOT SO FAST - can't do this here.  If we time out, then later get the reply, we can't decrement this twice.  Or the CPU will not like us.  Do it if not rcvd.  self.parallelJobsNow--;
+
+	// hotfix for #78, prevents RangeErrors for undersized packets
+	if (!(theData && theData.length > 6)) {
+		outputLog('INVALID READ RESPONSE - DISCONNECTING');
+		outputLog("The incoming packet doesn't have the required minimum length of 7 bytes");
+		outputLog(theData);
+		self.connectionReset();
+		return;
+	}
+
+	var data=checkRFCData(theData);
+
+	if(data==="fastACK"){
+		//read again and wait for the requested data
+		outputLog('Fast Acknowledge received.', 0, self.connectionID);
+		self.isoclient.removeAllListeners('error');
+		self.isoclient.removeAllListeners('data');
+		self.isoclient.on('data', function() {
+			self.onResponse.apply(self, arguments);
+		});
+		self.isoclient.on('error', function() {
+			self.readWriteError.apply(self, arguments);
+		});
+	}else if( data[7] === 0x32 ){//check the validy of FA+S7 package
+
+		//*********************   VALIDY CHECK ***********************************
+		//TODO: Check S7-Header properly
+		if (data.length > 8 && data[8] != 3) {
+			outputLog('PDU type (byte 8) was returned as ' + data[8] + ' where the response PDU of 3 was expected.');
+			outputLog('Maybe you are requesting more than 240 bytes of data in a packet?');
+			outputLog(data);
+			self.connectionReset();
+			return null;
+		}
+		// The smallest read packet will pass a length check of 25.  For a 1-item write response with no data, length will be 22.
+		if (data.length > data.readInt16BE(2)) {
+			outputLog("An oversize packet was detected.  Excess length is " + (data.length - data.readInt16BE(2)) + ".  ");
+			outputLog("We assume this is because two packets were sent at nearly the same time by the PLC.");
+			outputLog("We are slicing the buffer and scheduling the second half for further processing next loop.");
+			setTimeout(function() {
+				self.onResponse.apply(self, arguments);
+			}, 0, data.slice(data.readInt16BE(2)));  // This re-triggers this same function with the sliced-up buffer.
+			// was used as a test		setTimeout(process.exit, 2000);
+		}
+
+		if (data.length < data.readInt16BE(2) || data.readInt16BE(2) < 22 || data[5] !== 0xf0 || data[4] + 1 + 12 + 4 + data.readInt16BE(13) + data.readInt16BE(15) !== data.readInt16BE(2) || !(data[6] >> 7) || (data[7] !== 0x32) || (data[8] !== 3)) {
+			outputLog('INVALID READ RESPONSE - DISCONNECTING');
+			outputLog('TPKT Length From Header is ' + data.readInt16BE(2) + ' and RCV buffer length is ' + data.length + ' and COTP length is ' + data.readUInt8(4) + ' and data[6] is ' + data[6]);
+			outputLog(data);
+			self.connectionReset();
+			return null;
+		}
+
+		//**********************   GO ON  *************************
+		// Log the receive
+		outputLog('Received ' + data.readUInt16BE(15) + ' bytes of S7-data from PLC.  Sequence number is ' + data.readUInt16BE(11), 1, self.connectionID);
+
+		// Check the sequence number
+		var foundSeqNum; // self.readPacketArray.length - 1;
+		var isReadResponse, isWriteResponse;
+
+		//	for (packetCount = 0; packetCount < self.readPacketArray.length; packetCount++) {
+		//		if (self.readPacketArray[packetCount].seqNum == data.readUInt16BE(11)) {
+		//			foundSeqNum = packetCount;
+		//			break;
+		//		}
+		//	}
+		foundSeqNum = self.findReadIndexOfSeqNum(data.readUInt16BE(11));
+
+		//	if (self.readPacketArray[packetCount] == undefined) {
+		if (foundSeqNum === undefined) {
+			foundSeqNum = self.findWriteIndexOfSeqNum(data.readUInt16BE(11));
+			if (foundSeqNum !== undefined) {
+				//		for (packetCount = 0; packetCount < self.writePacketArray.length; packetCount++) {
+				//			if (self.writePacketArray[packetCount].seqNum == data.readUInt16BE(11)) {
+				//				foundSeqNum = packetCount;
+				self.writeResponse(data, foundSeqNum);
+				isWriteResponse = true;
+				//				break;
+			}
 
 
+		} else {
+			isReadResponse = true;
+			self.readResponse(data, foundSeqNum);
+		}
 
+		if ((!isReadResponse) && (!isWriteResponse)) {
+			outputLog("Sequence number that arrived wasn't a write reply either - dropping");
+			outputLog(data);
+			// 	I guess this isn't a showstopper, just ignore it.
+			//		self.isoclient.end();
+			//		setTimeout(self.connectNow, 2000, self.connectionParams);
+			return null;
+		}
 
+	}else{
+		outputLog('INVALID READ RESPONSE - DISCONNECTING');
+		outputLog('TPKT Length From Header is ' + theData.readInt16BE(2) + ' and RCV buffer length is ' + theData.length + ' and COTP length is ' + theData.readUInt8(4) + ' and data[6] is ' + theData[6]);
+		outputLog(theData);
+		self.connectionReset();
+		return null;
+	}
 
+}
 
+NodeS7.prototype.findReadIndexOfSeqNum = function(seqNum) {
+	var self = this, packetCounter;
+	for (packetCounter = 0; packetCounter < self.readPacketArray.length; packetCounter++) {
+		if (self.readPacketArray[packetCounter].seqNum == seqNum) {
+			return packetCounter;
+		}
+	}
+	return undefined;
+}
 
+NodeS7.prototype.findWriteIndexOfSeqNum = function(seqNum) {
+	var self = this, packetCounter;
+	for (packetCounter = 0; packetCounter < self.writePacketArray.length; packetCounter++) {
+		if (self.writePacketArray[packetCounter].seqNum == seqNum) {
+			return packetCounter;
+		}
+	}
+	return undefined;
+}
 
+NodeS7.prototype.writeResponse = function(data, foundSeqNum) {
+	var self = this, dataPointer = 21, i, anyBadQualities;
 
+	for (var itemCount = 0; itemCount < self.writePacketArray[foundSeqNum].itemList.length; itemCount++) {
+		//		outputLog('Pointer is ' + dataPointer);
+		dataPointer = processS7WriteItem(data, self.writePacketArray[foundSeqNum].itemList[itemCount], dataPointer);
+		if (!dataPointer) {
+			outputLog('Stopping Processing Write Response Packet due to unrecoverable packet error');
+			break;
+		}
+	}
 
+	// Make a note of the time it took the PLC to process the request.
+	self.writePacketArray[foundSeqNum].reqTime = process.hrtime(self.writePacketArray[foundSeqNum].reqTime);
+	outputLog('Time is ' + self.writePacketArray[foundSeqNum].reqTime[0] + ' seconds and ' + Math.round(self.writePacketArray[foundSeqNum].reqTime[1] * 10 / 1e6) / 10 + ' ms.', 1, self.connectionID);
 
+	//	self.writePacketArray.splice(foundSeqNum, 1);
+	if (!self.writePacketArray[foundSeqNum].rcvd) {
+		self.writePacketArray[foundSeqNum].rcvd = true;
+		self.parallelJobsNow--;
+	}
+	clearTimeout(self.writePacketArray[foundSeqNum].timeout);
 
+	if (!self.writePacketArray.every(doneSending)) {
+		outputLog("Not done sending - sending more packets from writeResponse",1,self.connectionID);
+		self.sendWritePacket();
+	} else {
+		outputLog("Received all packets in writeResponse",1,self.connectionID);
+		for (i = 0; i < self.writePacketArray.length; i++) {
+			self.writePacketArray[i].sent = false;
+			self.writePacketArray[i].rcvd = false;
+		}
 
+		anyBadQualities = false;
 
-
-
-
-
-
-
-
-
-
-
-
+		for (i = 0; i < self.globalWriteBlockList.length; i++) {
+			// Post-process the write code and apply the quality.
+			// Loop through the global block list...
+			writePostProcess(self.globalWriteBlockList[i]);
+			for (var k = 0; k < self.globalWriteBlockList[i].itemReference.length; k++) {
+				outputLog(self.globalWriteBlockList[i].itemReference[k].addr + ' write completed with quality ' + self.globalWriteBlockList[i].itemReference[k].writeQuality, 0, self.connectionID);
+				if (!isQualityOK(self.globalWriteBlockList[i].itemReference[k].writeQuality)) {
+					anyBadQualities = true;
+				}
+			}
+//			outputLog(self.globalWriteBlockList[i].addr + ' write completed with quality ' + self.globalWriteBlockList[i].writeQuality, 1, self.connectionID);
+			if (!isQualityOK(self.globalWriteBlockList[i].writeQuality)) { anyBadQualities = true; }
+		}
+		if (self.resetPending) {
+			outputLog('Calling reset from writeResponse as there is one pending',0,self.connectionID);
+			self.resetNow();
+		}
+		if (self.isoConnectionState === 0) {
+			self.connectNow(self.connectionParams, false);
+		}
+		outputLog('We are calling back our writeDoneCallback.',1,self.connectionID);
+		if (typeof(self.writeDoneCallback) === 'function') {
+			self.writeDoneCallback(anyBadQualities);
+		}
+	}
+}
 
 function doneSending(element) {
 	return ((element.sent && element.rcvd) ? true : false);
 }
 
+NodeS7.prototype.readResponse = function(data, foundSeqNum) {
+	var self = this, i;
+	var anyBadQualities;
+	var dataPointer = 21; // For non-routed packets we start at byte 21 of the packet.  If we do routing it will be more than this.
+	var dataObject = {};
+
+	//	if (self.readPacketArray.timeod (i forget what was going on here)
+	//	if (typeof(data) === "undefined") {
+	//		outputLog("Undefined " + foundSeqNum);
+	//	} else {
+	//		outputLog("Defined " + foundSeqNum);
+	//	}
+
+	outputLog("ReadResponse called", 1, self.connectionID);
+
+	if (!self.readPacketArray[foundSeqNum].sent) {
+		outputLog('WARNING: Received a read response packet that was not marked as sent', 0, self.connectionID);
+		//TODO - fix the network unreachable error that made us do this
+		return null;
+	}
+
+	if (self.readPacketArray[foundSeqNum].rcvd) {
+		outputLog('WARNING: Received a read response packet that was already marked as received', 0, self.connectionID);
+		return null;
+	}
+
+	for (var itemCount = 0; itemCount < self.readPacketArray[foundSeqNum].itemList.length; itemCount++) {
+		dataPointer = processS7Packet(data, self.readPacketArray[foundSeqNum].itemList[itemCount], dataPointer, self.connectionID);
+		if (!dataPointer) {
+			outputLog('Received a ZERO RESPONSE Processing Read Packet due to unrecoverable packet error', 0, self.connectionID);
+			// We rely on this for our timeout.
+		}
+	}
+
+	// Make a note of the time it took the PLC to process the request.
+	self.readPacketArray[foundSeqNum].reqTime = process.hrtime(self.readPacketArray[foundSeqNum].reqTime);
+	outputLog('Time is ' + self.readPacketArray[foundSeqNum].reqTime[0] + ' seconds and ' + Math.round(self.readPacketArray[foundSeqNum].reqTime[1] * 10 / 1e6) / 10 + ' ms.', 1, self.connectionID);
+
+	// Do the bookkeeping for packet and timeout.
+	if (!self.readPacketArray[foundSeqNum].rcvd) {
+		self.readPacketArray[foundSeqNum].rcvd = true;
+		self.parallelJobsNow--;
+	}
+	clearTimeout(self.readPacketArray[foundSeqNum].timeout);
+
+	if (self.readPacketArray.every(doneSending)) {  // if sendReadPacket returns true we're all done.
+		// Mark our packets unread for next time.
+		for (i = 0; i < self.readPacketArray.length; i++) {
+			self.readPacketArray[i].sent = false;
+			self.readPacketArray[i].rcvd = false;
+		}
+
+		anyBadQualities = false;
+
+		// Loop through the global block list...
+		for (i = 0; i < self.globalReadBlockList.length; i++) {
+			var lengthOffset = 0;
+			// For each block, we loop through all the requests.  Remember, for all but large arrays, there will only be one.
+			for (var j = 0; j < self.globalReadBlockList[i].requestReference.length; j++) {
+				// Now that our request is complete, we reassemble the BLOCK byte buffer as a copy of each and every request byte buffer.
+				self.globalReadBlockList[i].requestReference[j].byteBuffer.copy(self.globalReadBlockList[i].byteBuffer, lengthOffset, 0, self.globalReadBlockList[i].requestReference[j].byteLength);
+				self.globalReadBlockList[i].requestReference[j].qualityBuffer.copy(self.globalReadBlockList[i].qualityBuffer, lengthOffset, 0, self.globalReadBlockList[i].requestReference[j].byteLength);
+				lengthOffset += self.globalReadBlockList[i].requestReference[j].byteLength;
+			}
+			// For each ITEM reference pointed to by the block, we process the item.
+			for (var k = 0; k < self.globalReadBlockList[i].itemReference.length; k++) {
+				processS7ReadItem(self.globalReadBlockList[i].itemReference[k]);
+				outputLog('Address ' + self.globalReadBlockList[i].itemReference[k].addr + ' has value ' + self.globalReadBlockList[i].itemReference[k].value + ' and quality ' + self.globalReadBlockList[i].itemReference[k].quality, 1, self.connectionID);
+				if (!isQualityOK(self.globalReadBlockList[i].itemReference[k].quality)) {
+					anyBadQualities = true;
+					dataObject[self.globalReadBlockList[i].itemReference[k].useraddr] = self.globalReadBlockList[i].itemReference[k].quality;
+				} else {
+					dataObject[self.globalReadBlockList[i].itemReference[k].useraddr] = self.globalReadBlockList[i].itemReference[k].value;
+				}
+			}
+		}
+
+// Not as of Feb 2019		if (self.resetPending) {
+// Not as of Feb 2019			self.resetNow();
+// Not as of Feb 2019		}
+
+		if (!self.writeInQueue) {
+			if (self.resetPending) {
+				outputLog('Calling reset from readResponse as there is one pending',0,self.connectionID);
+				self.resetNow();
+			}
+			if (self.isoConnectionState === 0) {
+				self.connectNow(self.connectionParams, false);
+			}
+		} else {
+			outputLog('Write In Queue.  ICS ' + self.isoConnectionState + ' resetPending ' + self.resetPending,1,self.connectionID);		
+		}
+
+		// Inform our user that we are done and that the values are ready for pickup.
+		outputLog("We are calling back our readDoneCallback.", 1, self.connectionID);
+		if (typeof (self.readDoneCallback) === 'function') {
+			self.readDoneCallback(anyBadQualities, dataObject);
+		}
+
+		if (!self.isReading() && self.writeInQueue) {
+			outputLog("SendWritePacket called because write was queued.", 0, self.connectionID);
+			self.sendWritePacket();
+		}
+	} else {
+		self.sendReadPacket();
+	}
+}
 
 
+NodeS7.prototype.onClientDisconnect = function() {
+	var self = this;
+	outputLog('ISO-on-TCP connection DISCONNECTED.', 0, self.connectionID);
 
+	// We issue the callback here for Trela/Honcho - in some cases TCP connects, and ISO-on-TCP doesn't.
+	// If this is the case we need to issue the Connect CB in order to keep trying.
+	if ((!self.connectCBIssued) && (typeof (self.connectCallback) === "function")) {
+		self.connectCBIssued = true;
+		self.connectCallback("Error - TCP connected, ISO didn't");
+	}
 
+	// We used to call self.connectionCleanup() - in other words we would give up.
+	// However - realize that this event is called when the OTHER END of the connection sends a FIN packet.
+	// Certain situations (download user program to mem card on S7-400, pop memory card out of S7-300, both with NetLink) cause this to happen.
+	// So now, let's try a "connetionReset".  This way, we are guaranteed to return values (or bad) and reset at the proper time.
+	// self.connectionCleanup();
+	self.connectionReset();
+}
 
+NodeS7.prototype.onClientClose = function() {
+	var self = this;
+    // clean up the connection now the socket has closed
+		// We used to call self.connectionCleanup() here, but it caused problems.
+		// However - realize that this event is also called when the OTHER END of the connection sends a FIN packet.
+		// Certain situations (download user program to mem card on S7-400, pop memory card out of S7-300, both with NetLink) cause this to happen.
+		// So now, let's try a "connetionReset".  This way, we are guaranteed to return values (even if bad) and reset at the proper time.
+		// Without this, client applications had to be prepared for a read/write not returning.
+	self.connectionReset();
 
+    // initiate the callback stored by dropConnection
+    if (self.dropConnectionCallback) {
+        self.dropConnectionCallback();
+        // prevent any possiblity of the callback being called twice
+        self.dropConnectionCallback = null;
+        // and cancel the timeout
+        clearTimeout(self.dropConnectionTimer);
+    }
+}
+
+NodeS7.prototype.connectionReset = function() {
+	var self = this;
+	self.isoConnectionState = 0;
+	self.resetPending = true;
+	outputLog('ConnectionReset has been called to set the reset as pending', 0, self.connectionID);
+	if (!self.isReading() && !self.isWriting() && !self.writeInQueue && typeof(self.resetTimeout) === 'undefined') { // We can no longer logically ignore writes here
+		self.resetTimeout = setTimeout(function() {
+			outputLog('Timed reset has happened. Ideally this would never be called as reset should be completed when done r/w.',0,self.connectionID);
+			self.resetNow.apply(self, arguments);
+		}, 3500);  // Increased to 3500 to prevent problems with packet timeouts
+	}
+	// We wait until read() is called again to re-connect.
+}
+
+NodeS7.prototype.resetNow = function() {
+	var self = this;
+	self.isoConnectionState = 0;
+	self.isoclient.end();
+	outputLog('ResetNOW is happening', 0, self.connectionID);
+	self.resetPending = false;
+	// In some cases, we can have a timeout scheduled for a reset, but we don't want to call it again in that case.
+	// We only want to call a reset just as we are returning values.  Otherwise, we will get asked to read // more values and we will "break our promise" to always return something when asked.
+	if (typeof (self.resetTimeout) !== 'undefined') {
+		clearTimeout(self.resetTimeout);
+		self.resetTimeout = undefined;
+		outputLog('Clearing an earlier scheduled reset', 0, self.connectionID);
+	}
+}
+
+NodeS7.prototype.connectionCleanup = function() {
+	var self = this;
+	self.isoConnectionState = 0;
+	outputLog('Connection cleanup is happening', 0, self.connectionID);
+	if (typeof (self.isoclient) !== "undefined") {
+		// destroy the socket connection
+		self.isoclient.destroy();
+		self.isoclient.removeAllListeners('data');
+		self.isoclient.removeAllListeners('error');
+		self.isoclient.removeAllListeners('connect');
+		self.isoclient.removeAllListeners('end');
+		self.isoclient.removeAllListeners('close');
+		self.isoclient.on('error',function() {
+			outputLog('TCP socket error following connection cleanup');
+		});
+	}
+	clearTimeout(self.connectTimeout);
+	clearTimeout(self.PDUTimeout);
+	self.clearReadPacketTimeouts();  // Note this clears timeouts.
+	self.clearWritePacketTimeouts();  // Note this clears timeouts.
+}
 
 /**
  * Internal Functions
@@ -2876,6 +2882,6 @@ function outputLog(txt, debugLevel, id) {
 		idtext = ' ' + id;
 	}
 	if (typeof (debugLevel) === 'undefined' || effectiveDebugLevel >= debugLevel) {
-		console.log('[' + process.hrtime() + idtext + '] ' + format(txt));
+		console.log('[' + process.hrtime() + idtext + '] ' + util.format(txt));
 	}
 }
