@@ -31,12 +31,12 @@
 // when using this library.  Test thoroughly in a laboratory environment.
 
 
-import {connect} from "net";
-var util = require("util");
+import { net } from 'electron';
+import { format } from "util";
 var effectiveDebugLevel = 0; // intentionally global, shared between connections
 var silentMode = false;
 
-module.exports = NodeS7;
+export default NodeS7;
 
 function NodeS7(opts) {
 	opts = opts || {};
@@ -195,7 +195,7 @@ NodeS7.prototype.connectNow = function(cParam) {
 	if (self.isoConnectionState >= 1) { return; }
 	self.connectionCleanup();
 
-        self.isoclient = connect(cParam);                                                                                                                                        
+        self.isoclient = net.connect(cParam);                                                                                                                                        
 
         self.isoclient.setTimeout(cParam.timeout || 5000, () => {                                                                                                                    
             self.isoclient.destroy();                                                                                                                                            
@@ -597,7 +597,7 @@ NodeS7.prototype.readAllItems = function(arg) {
 
 	// Now we check the array of adding and removing things.  Only now is it really safe to do this.
 	self.addRemoveArray.forEach(function(element) {
-		outputLog('Adding or Removing ' + util.format(element), 1, self.connectionID);
+		outputLog('Adding or Removing ' + format(element), 1, self.connectionID);
 		if (element.action === 'remove') {
 			self.removeItemsNow(element.arg);
 		}
@@ -2882,6 +2882,6 @@ function outputLog(txt, debugLevel, id) {
 		idtext = ' ' + id;
 	}
 	if (typeof (debugLevel) === 'undefined' || effectiveDebugLevel >= debugLevel) {
-		console.log('[' + process.hrtime() + idtext + '] ' + util.format(txt));
+		console.log('[' + process.hrtime() + idtext + '] ' + format(txt));
 	}
 }
